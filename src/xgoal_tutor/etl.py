@@ -256,15 +256,18 @@ def _insert_shots_and_freeze_frames(
             for entity in freeze_frame_entries:
                 if not isinstance(entity, Mapping):
                     continue
+                position_name = _get_nested_str(entity, ("position", "name"))
+                keeper_flag = 1 if (entity.get("keeper") is True or position_name == "Goalkeeper") else 0
+                teammate_flag = 1 if entity.get("teammate") else 0
                 location_xy = _extract_location(entity.get("location"))
                 freeze_frames.append(
                     (
                         shot_id,
                         _get_nested_int(entity, ("player", "id")),
                         _get_nested_str(entity, ("player", "name")),
-                        _get_nested_str(entity, ("position", "name")),
-                        _bool_to_int(entity.get("teammate")),
-                        _bool_to_int(entity.get("keeper")),
+                        position_name,
+                        teammate_flag,
+                        keeper_flag,
                         location_xy[0],
                         location_xy[1],
                     )

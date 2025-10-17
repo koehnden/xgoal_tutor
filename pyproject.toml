@@ -8,6 +8,7 @@ packages = [{ include = "xgoal_tutor", from = "src" }]
 
 [tool.poetry.dependencies]
 python = "^3.11"
+tqdm = "^4.67.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2"
