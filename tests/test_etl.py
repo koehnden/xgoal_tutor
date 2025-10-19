@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
+from functools import partial
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 
@@ -184,16 +187,16 @@ def test_main_invokes_loader(
     monkeypatch: pytest.MonkeyPatch, sample_events: Path, tmp_path: Path
 ) -> None:
     database = tmp_path / "cli.sqlite"
-    called: dict[str, tuple[Path, Path]] = {}
+    called: dict[str, tuple[str | Path, Path | str]] = {}
 
-    def fake_loader(events_path: Path, db_path: Path) -> None:
+    def fake_loader(events_path: Path | str, db_path: Path | str) -> None:
         called["args"] = (events_path, db_path)
 
     monkeypatch.setattr(etl, "load_match_events", fake_loader)
 
     etl.main([str(sample_events), str(database)])
 
-    assert called["args"] == (sample_events, database)
+    assert called["args"] == (str(sample_events), database)
 
 
 def test_reader_validates_input(tmp_path: Path) -> None:
@@ -202,6 +205,38 @@ def test_reader_validates_input(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="JSON array"):
         reader.read_statsbomb_events(events_file)
+
+
+def test_reader_rejects_non_json_urls() -> None:
+    with pytest.raises(ValueError, match="must point directly"):
+        reader.read_statsbomb_events("https://example.com/events")
+
+
+def test_reader_downloads_remote_json(
+    tmp_path: Path, sample_event_payload: list[dict[str, Any]]
+) -> None:
+    events_file = tmp_path / "remote.json"
+    events_file.write_text(json.dumps(sample_event_payload), encoding="utf-8")
+
+    class SilentHandler(SimpleHTTPRequestHandler):
+        def log_message(self, format: str, *args: Any) -> None:  # pragma: no cover - silence server
+            return
+
+    handler = partial(SilentHandler, directory=str(tmp_path))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.server_address
+        url = f"http://{host}:{port}/{events_file.name}"
+        events = reader.read_statsbomb_events(url)
+    finally:
+        server.shutdown()
+        thread.join()
+
+    assert len(events) == len(sample_event_payload)
 
 
 def test_builders_create_expected_rows(sample_events_list: list[reader.MutableEvent]) -> None:

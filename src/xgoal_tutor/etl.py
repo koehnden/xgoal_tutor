@@ -7,7 +7,7 @@ from typing import Optional, Sequence
 from .ingest import load_statsbomb_events
 
 
-def load_match_events(events_path: Path, db_path: Path) -> None:
+def load_match_events(events_path: Path | str, db_path: Path | str) -> None:
     load_statsbomb_events(events_path, db_path)
 
 
@@ -16,7 +16,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         prog="xgoal-tutor-etl",
         description="Load a StatsBomb events JSON file into a SQLite database.",
     )
-    parser.add_argument("events_path", type=Path, help="Path to the StatsBomb events JSON file")
+    parser.add_argument(
+        "events_path",
+        help="Path or URL of the StatsBomb events JSON file",
+    )
     parser.add_argument(
         "database_path", type=Path, help="Path to the SQLite database that will receive the data"
     )

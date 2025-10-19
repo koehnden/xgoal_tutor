@@ -9,9 +9,9 @@ from .schema import initialise_schema
 from .writer import StatsBombSQLiteWriter
 
 
-def load_statsbomb_events(events_path: Path, db_path: Path) -> None:
+def load_statsbomb_events(events_path: Path | str, db_path: Path | str) -> None:
     events = read_statsbomb_events(events_path)
-    _write_to_database(events, db_path)
+    _write_to_database(events, Path(db_path))
 
 
 def _write_to_database(events: Sequence[MutableEvent], db_path: Path) -> None:

@@ -10,7 +10,10 @@ def main() -> None:
         prog="ingest-statsbomb",
         description="Load a StatsBomb events JSON file into a SQLite database.",
     )
-    parser.add_argument("events_path", type=Path, help="Path to the StatsBomb events JSON file")
+    parser.add_argument(
+        "events_path",
+        help="Path or URL of the StatsBomb events JSON file",
+    )
     parser.add_argument(
         "database_path", type=Path, help="Path to the SQLite database that will receive the data"
     )
