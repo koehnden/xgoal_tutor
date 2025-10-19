@@ -101,8 +101,53 @@ def _parse_github_tree(parsed: ParseResult) -> tuple[str, str, str, str]:
 
 
 def _fetch_github_directory_files(
-    owner: str, repo: str, ref: str, directory: str
+    owner: str, repo: str, ref: str, directory: str, *, _root: str | None = None
 ) -> list[str]:
+    root = directory if _root is None else _root
+    listing = _list_github_directory(owner, repo, ref, directory)
+
+    entries: list[tuple[str, dict[str, Any]]] = []
+    for item in listing:
+        if not isinstance(item, dict):
+            continue
+
+        item_type = item.get("type")
+        path = item.get("path")
+        if not isinstance(path, str):
+            continue
+
+        if item_type == "file":
+            download_url = item.get("download_url")
+            name = item.get("name", "")
+            if isinstance(download_url, str) and name.lower().endswith(".json"):
+                entries.append((path, {"kind": "file", "url": download_url}))
+        elif item_type == "dir":
+            entries.append((path, {"kind": "dir", "path": path}))
+
+    payloads: list[str] = []
+    for _, entry in sorted(entries, key=lambda item: item[0]):
+        if entry.get("kind") == "file":
+            payloads.append(_download_url(entry["url"]))
+        elif entry.get("kind") == "dir":
+            payloads.extend(
+                _fetch_github_directory_files(
+                    owner, repo, ref, entry["path"], _root=root
+                )
+            )
+
+    if payloads:
+        return payloads
+
+    if _root is None:
+        raise FileNotFoundError(
+            "No JSON files found in GitHub directory "
+            f"https://github.com/{owner}/{repo}/tree/{ref}/{directory}"
+        )
+
+    return []
+
+
+def _list_github_directory(owner: str, repo: str, ref: str, directory: str) -> list[Any]:
     api_url = (
         f"https://api.github.com/repos/{owner}/{repo}/contents/{directory}?ref={ref}"
     )
@@ -127,22 +172,7 @@ def _fetch_github_directory_files(
     if not isinstance(listing, list):
         raise ValueError("Unexpected response when listing GitHub directory contents")
 
-    download_urls = sorted(
-        item.get("download_url")
-        for item in listing
-        if isinstance(item, dict)
-        and item.get("type") == "file"
-        and isinstance(item.get("download_url"), str)
-        and item.get("name", "").lower().endswith(".json")
-    )
-
-    if not download_urls:
-        raise FileNotFoundError(
-            "No JSON files found in GitHub directory "
-            f"https://github.com/{owner}/{repo}/tree/{ref}/{directory}"
-        )
-
-    return [_download_url(url) for url in download_urls]
+    return listing
 
 
 def _parse_json(raw: str) -> Any:

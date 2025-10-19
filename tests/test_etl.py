@@ -318,20 +318,79 @@ def test_reader_downloads_github_tree(
     payload_a = json.dumps(sample_event_payload[:1])
     payload_b = json.dumps(sample_event_payload[1:])
 
-    captured: dict[str, tuple[str, str, str, str]] = {}
+    listings = {
+        "data/events": [
+            {"type": "dir", "path": "data/events/competition_a"},
+            {"type": "dir", "path": "data/events/competition_b"},
+        ],
+        "data/events/competition_a": [
+            {
+                "type": "file",
+                "path": "data/events/competition_a/match_a.json",
+                "name": "match_a.json",
+                "download_url": "https://example.com/match_a.json",
+            }
+        ],
+        "data/events/competition_b": [
+            {"type": "dir", "path": "data/events/competition_b/round"}
+        ],
+        "data/events/competition_b/round": [
+            {
+                "type": "file",
+                "path": "data/events/competition_b/round/match_b.json",
+                "name": "match_b.json",
+                "download_url": "https://example.com/match_b.json",
+            }
+        ],
+    }
 
-    def fake_fetch(owner: str, repo: str, ref: str, directory: str) -> list[str]:
-        captured["args"] = (owner, repo, ref, directory)
-        return [payload_a, payload_b]
+    captured_calls: list[tuple[str, str, str, str]] = []
+    downloaded_urls: list[str] = []
 
-    monkeypatch.setattr(reader, "_fetch_github_directory_files", fake_fetch)
+    def fake_list(owner: str, repo: str, ref: str, directory: str) -> list[dict[str, Any]]:
+        captured_calls.append((owner, repo, ref, directory))
+        return listings.get(directory, [])
+
+    def fake_download(url: str) -> str:
+        downloaded_urls.append(url)
+        if url.endswith("match_a.json"):
+            return payload_a
+        if url.endswith("match_b.json"):
+            return payload_b
+        raise AssertionError(f"Unexpected download URL: {url}")
+
+    monkeypatch.setattr(reader, "_list_github_directory", fake_list)
+    monkeypatch.setattr(reader, "_download_url", fake_download)
 
     events = reader.read_statsbomb_events(
         "https://github.com/statsbomb/open-data/tree/master/data/events"
     )
 
-    assert captured["args"] == ("statsbomb", "open-data", "master", "data/events")
+    assert captured_calls[0] == (
+        "statsbomb",
+        "open-data",
+        "master",
+        "data/events",
+    )
+    assert downloaded_urls == [
+        "https://example.com/match_a.json",
+        "https://example.com/match_b.json",
+    ]
     assert {event["id"] for event in events} == {"pass-1", "shot-1", "shot-2"}
+
+
+def test_reader_github_tree_without_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_list(owner: str, repo: str, ref: str, directory: str) -> list[dict[str, Any]]:
+        if directory == "data/events":
+            return [{"type": "dir", "path": "data/events/empty"}]
+        return []
+
+    monkeypatch.setattr(reader, "_list_github_directory", fake_list)
+
+    with pytest.raises(FileNotFoundError, match="No JSON files found"):
+        reader.read_statsbomb_events(
+            "https://github.com/statsbomb/open-data/tree/master/data/events"
+        )
 
 
 def test_builders_create_expected_rows(sample_events_list: list[reader.MutableEvent]) -> None:
