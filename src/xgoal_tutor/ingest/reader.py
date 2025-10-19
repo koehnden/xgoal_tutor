@@ -1,10 +1,19 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from pathlib import Path
+import ssl
+import warnings
+from urllib.error import URLError
 from urllib.parse import ParseResult, urlparse
 from urllib.request import Request, urlopen
 from typing import Any, Iterable, MutableMapping
+
+try:  # pragma: no cover - optional dependency resolution
+    import certifi
+except ImportError:  # pragma: no cover - fallback if certifi missing
+    certifi = None
 
 MutableEvent = MutableMapping[str, Any]
 
@@ -58,13 +67,19 @@ def _read_http_resources(parsed: ParseResult) -> Iterable[str]:
 
 
 def _download_url(url: str) -> str:
-    with urlopen(url) as response:  # nosec: B310 - trusted input validated above
-        status = getattr(response, "status", 200)
-        if status != 200:
-            raise FileNotFoundError(
-                f"Could not download StatsBomb events from {url} (HTTP {status})"
-            )
-        return response.read().decode("utf-8")
+    try:
+        with _open_url(url) as response:
+            status = getattr(response, "status", 200)
+            if status != 200:
+                raise FileNotFoundError(
+                    f"Could not download StatsBomb events from {url} (HTTP {status})"
+                )
+            return response.read().decode("utf-8")
+    except URLError as error:  # pragma: no cover - requires network failure
+        raise ConnectionError(
+            "Could not download StatsBomb events from "
+            f"{url}: {error.reason}"
+        ) from error
 
 
 def _is_github_tree(parsed: ParseResult) -> bool:
@@ -93,15 +108,21 @@ def _fetch_github_directory_files(
     )
     request = Request(api_url, headers={"Accept": "application/vnd.github.v3+json"})
 
-    with urlopen(request) as response:  # nosec: B310 - trusted input validated above
-        status = getattr(response, "status", 200)
-        if status != 200:
-            raise FileNotFoundError(
-                "Could not list StatsBomb events from "
-                f"https://github.com/{owner}/{repo}/tree/{ref}/{directory} "
-                f"(HTTP {status})"
-            )
-        listing = json.loads(response.read().decode("utf-8"))
+    try:
+        with _open_url(request) as response:
+            status = getattr(response, "status", 200)
+            if status != 200:
+                raise FileNotFoundError(
+                    "Could not list StatsBomb events from "
+                    f"https://github.com/{owner}/{repo}/tree/{ref}/{directory} "
+                    f"(HTTP {status})"
+                )
+            listing = json.loads(response.read().decode("utf-8"))
+    except URLError as error:  # pragma: no cover - requires network failure
+        raise ConnectionError(
+            "Could not list StatsBomb events from "
+            f"https://github.com/{owner}/{repo}/tree/{ref}/{directory}: {error.reason}"
+        ) from error
 
     if not isinstance(listing, list):
         raise ValueError("Unexpected response when listing GitHub directory contents")
@@ -144,3 +165,47 @@ def _normalise_events(data: Any) -> list[MutableEvent]:
 
 
 __all__ = ["MutableEvent", "read_statsbomb_events"]
+
+
+@lru_cache(maxsize=1)
+def _ssl_context() -> ssl.SSLContext:
+    if certifi is not None:
+        return ssl.create_default_context(cafile=certifi.where())
+    return ssl.create_default_context()
+
+
+@lru_cache(maxsize=1)
+def _insecure_ssl_context() -> ssl.SSLContext:
+    return ssl._create_unverified_context()  # type: ignore[attr-defined]
+
+
+def _open_url(resource: str | Request):
+    try:
+        return urlopen(resource, context=_ssl_context())  # nosec: B310
+    except URLError as error:
+        if _is_certificate_error(error):
+            warnings.warn(
+                "Falling back to an unverified HTTPS connection to download "
+                "StatsBomb events because certificate verification failed. "
+                "Install system certificates to restore secure downloads.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return urlopen(resource, context=_insecure_ssl_context())  # nosec: B310
+        raise
+
+
+def _is_certificate_error(error: URLError) -> bool:
+    reason = getattr(error, "reason", None)
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return True
+    if isinstance(reason, ssl.SSLError):
+        return _contains_certificate_error(str(reason))
+    if isinstance(reason, str):
+        return _contains_certificate_error(reason)
+    return False
+
+
+def _contains_certificate_error(message: str) -> bool:
+    normalised = message.upper().replace(" ", "_")
+    return "CERTIFICATE_VERIFY_FAILED" in normalised

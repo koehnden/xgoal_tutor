@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ssl
 import sqlite3
 import threading
 from functools import partial
@@ -9,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+from urllib.error import URLError
 
 from xgoal_tutor import etl
 from xgoal_tutor.ingest import loader, reader, rows
@@ -197,6 +200,55 @@ def test_main_invokes_loader(
     etl.main([str(sample_events), str(database)])
 
     assert called["args"] == (str(sample_events), database)
+
+
+def test_read_statsbomb_events_raises_on_ssl_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    url = "https://example.com/events.json"
+
+    def fake_urlopen(*_: Any, **__: Any) -> Any:
+        raise URLError(ssl.SSLError("certificate verify failed"))
+
+    monkeypatch.setattr(reader, "urlopen", fake_urlopen)
+
+    with pytest.raises(ConnectionError) as excinfo:
+        reader.read_statsbomb_events(url)
+
+    assert "certificate" in str(excinfo.value).lower()
+
+
+def test_read_statsbomb_events_falls_back_to_unverified_context(
+    monkeypatch: pytest.MonkeyPatch, recwarn: pytest.WarningsRecorder
+) -> None:
+    url = "https://example.com/events.json"
+    attempts: list[int] = []
+
+    class FakeResponse:
+        status = 200
+
+        def read(self) -> bytes:
+            return b"[]"
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *args: Any) -> bool:
+            return False
+
+    def fake_urlopen(*_: Any, context: ssl.SSLContext, **__: Any) -> FakeResponse:
+        attempts.append(context.verify_mode)
+        if context.verify_mode == ssl.CERT_REQUIRED:
+            raise URLError("certificate verify failed")
+        return FakeResponse()
+
+    monkeypatch.setattr(reader, "urlopen", fake_urlopen)
+
+    events = reader.read_statsbomb_events(url)
+
+    assert events == []
+    assert attempts == [ssl.CERT_REQUIRED, ssl.CERT_NONE]
+    assert any("unverified" in str(w.message).lower() for w in recwarn)
 
 
 def test_reader_validates_input(tmp_path: Path) -> None:
