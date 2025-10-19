@@ -166,6 +166,30 @@ def test_load_match_events_populates_sqlite(sample_events: Path, tmp_path: Path)
         assert raw_event["id"] == "shot-1"
 
 
+def test_load_match_events_uses_filename_for_match_id(tmp_path: Path) -> None:
+    events = [
+        {
+            "id": "event-1",
+            "type": {"name": "Pass"},
+        }
+    ]
+
+    events_path = tmp_path / "987654.json"
+    events_path.write_text(json.dumps(events), encoding="utf-8")
+    database = tmp_path / "match_id.sqlite"
+
+    etl.load_match_events(events_path, database)
+
+    with sqlite3.connect(database) as conn:
+        conn.row_factory = sqlite3.Row
+        stored = conn.execute(
+            "SELECT match_id FROM events WHERE event_id = ?", ("event-1",)
+        ).fetchone()
+
+        assert stored is not None
+        assert stored["match_id"] == 987654
+
+
 def test_main_invokes_loader(monkeypatch: pytest.MonkeyPatch, sample_events: Path, tmp_path: Path) -> None:
     database = tmp_path / "cli.sqlite"
     called: dict[str, tuple[Path, Path]] = {}
