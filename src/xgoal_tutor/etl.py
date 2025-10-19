@@ -7,8 +7,10 @@ from typing import Optional, Sequence
 from xgoal_tutor.ingest import load_statsbomb_events
 
 
-def load_match_events(events_path: Path | str, db_path: Path | str) -> None:
-    load_statsbomb_events(events_path, db_path)
+def load_match_events(
+    events_path: Path | str, db_path: Path | str, *, show_progress: bool = False
+) -> None:
+    load_statsbomb_events(events_path, db_path, show_progress=show_progress)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
@@ -25,7 +27,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     )
     args = parser.parse_args(argv)
 
-    load_match_events(args.events_path, args.database_path)
+    load_match_events(args.events_path, args.database_path, show_progress=True)
 
 
 __all__ = ["load_match_events", "main"]

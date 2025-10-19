@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from xgoal_tutor.ingest.value_extractors import (
     MutableEvent,
@@ -89,6 +89,9 @@ FreezeFrameRow = Tuple[
 ]
 
 
+ProgressCallback = Optional[Callable[[], None]]
+
+
 def build_event_rows(events: Sequence[MutableEvent]) -> list[EventRow]:
     rows: list[EventRow] = []
     for event in events:
@@ -124,6 +127,42 @@ def build_shot_rows(
         )
 
     return rows, freeze_frames
+
+
+def build_all_rows(
+    events: Sequence[MutableEvent], progress: ProgressCallback = None
+) -> tuple[list[EventRow], list[ShotRow], list[FreezeFrameRow]]:
+    event_rows: list[EventRow] = []
+    shot_rows: list[ShotRow] = []
+    freeze_frame_rows: list[FreezeFrameRow] = []
+    events_by_id = _events_by_id(events)
+
+    for event in events:
+        try:
+            event_id = get_str(event.get("id"))
+            if not event_id:
+                continue
+
+            event_rows.append(_build_event_row(event_id, event))
+
+            if get_nested_str(event, ("type", "name")) != "Shot":
+                continue
+
+            shot_data = event.get("shot")
+            if not isinstance(shot_data, Mapping):
+                continue
+
+            shot_rows.append(
+                _build_shot_row(event_id, event, shot_data, events_by_id)
+            )
+            freeze_frame_rows.extend(
+                _build_freeze_frame_rows(event_id, shot_data.get("freeze_frame"))
+            )
+        finally:
+            if progress:
+                progress()
+
+    return event_rows, shot_rows, freeze_frame_rows
 
 
 def _build_event_row(event_id: str, event: MutableEvent) -> EventRow:
@@ -292,4 +331,5 @@ __all__ = [
     "FreezeFrameRow",
     "build_event_rows",
     "build_shot_rows",
+    "build_all_rows",
 ]

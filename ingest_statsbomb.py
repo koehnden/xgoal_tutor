@@ -19,7 +19,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    load_match_events(args.events_path, args.database_path)
+    load_match_events(args.events_path, args.database_path, show_progress=True)
 
 
 if __name__ == "__main__":

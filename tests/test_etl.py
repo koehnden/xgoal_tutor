@@ -13,6 +13,9 @@ import pytest
 
 from urllib.error import URLError
 
+import xgoal_tutor.ingest.schema as schema_module
+import xgoal_tutor.ingest.writer as writer_module
+
 from xgoal_tutor import etl
 from xgoal_tutor.ingest import loader, reader, rows
 
@@ -192,14 +195,16 @@ def test_main_invokes_loader(
     database = tmp_path / "cli.sqlite"
     called: dict[str, tuple[str | Path, Path | str]] = {}
 
-    def fake_loader(events_path: Path | str, db_path: Path | str) -> None:
-        called["args"] = (events_path, db_path)
+    def fake_loader(
+        events_path: Path | str, db_path: Path | str, *, show_progress: bool = False
+    ) -> None:
+        called["args"] = (events_path, db_path, show_progress)
 
     monkeypatch.setattr(etl, "load_match_events", fake_loader)
 
     etl.main([str(sample_events), str(database)])
 
-    assert called["args"] == (str(sample_events), database)
+    assert called["args"] == (str(sample_events), database, True)
 
 
 def test_read_statsbomb_events_raises_on_ssl_error(
@@ -343,6 +348,28 @@ def test_builders_create_expected_rows(sample_events_list: list[reader.MutableEv
     assert open_play_shot[39] == 1
 
 
+def test_build_all_rows_reports_progress(
+    sample_events_list: list[reader.MutableEvent],
+) -> None:
+    calls: list[int] = []
+
+    def progress() -> None:
+        calls.append(1)
+
+    rows.build_all_rows(sample_events_list, progress)
+
+    assert len(calls) == len(sample_events_list)
+
+
+def test_build_all_rows_matches_component_builders(
+    sample_events_list: list[reader.MutableEvent],
+) -> None:
+    event_rows, shot_rows, freeze_frame_rows = rows.build_all_rows(sample_events_list)
+
+    assert event_rows == rows.build_event_rows(sample_events_list)
+    assert (shot_rows, freeze_frame_rows) == rows.build_shot_rows(sample_events_list)
+
+
 def test_loader_round_trip(tmp_path: Path, sample_events_list: list[reader.MutableEvent]) -> None:
     database = tmp_path / "round_trip.sqlite"
     loader._write_to_database(sample_events_list, database)
@@ -351,3 +378,33 @@ def test_loader_round_trip(tmp_path: Path, sample_events_list: list[reader.Mutab
         conn.row_factory = sqlite3.Row
         stored = conn.execute("SELECT * FROM shots ORDER BY shot_id").fetchall()
         assert {shot["shot_id"] for shot in stored} == {"shot-1", "shot-2"}
+
+
+def test_writer_emits_progress_updates(
+    monkeypatch: pytest.MonkeyPatch, sample_events_list: list[reader.MutableEvent]
+) -> None:
+    updates: list[int] = []
+
+    class FakeTqdm:
+        def __init__(self, *, total: int | None, desc: str, unit: str, dynamic_ncols: bool) -> None:
+            self.total = total
+            self.desc = desc
+            self.unit = unit
+            self.dynamic_ncols = dynamic_ncols
+
+        def update(self, amount: int) -> None:
+            updates.append(amount)
+
+        def close(self) -> None:
+            updates.append(0)
+
+    monkeypatch.setattr(writer_module, "tqdm", lambda **kwargs: FakeTqdm(**kwargs))
+
+    with sqlite3.connect(":memory:") as connection:
+        schema_module.initialise_schema(connection)
+        writer_module.StatsBombSQLiteWriter(connection).write(
+            sample_events_list, show_progress=True
+        )
+
+    assert updates.count(1) == len(sample_events_list)
+    assert updates[-1] == 0

@@ -1,19 +1,78 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Sequence
+from typing import Any, Optional, Sequence
+
+try:  # pragma: no cover - exercised through integration tests when available
+    from tqdm.auto import tqdm as _real_tqdm
+except ImportError:  # pragma: no cover - fallback for environments without tqdm
+    class _NullTqdm:
+        def __init__(
+            self,
+            *,
+            total: int | None = None,
+            desc: str | None = None,
+            unit: str | None = None,
+            dynamic_ncols: bool | None = None,
+        ) -> None:
+            self.total = total
+            self.desc = desc
+            self.unit = unit
+            self.dynamic_ncols = dynamic_ncols
+
+        def update(self, amount: int) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    def _tqdm(**kwargs: Any) -> _NullTqdm:
+        return _NullTqdm(**kwargs)
+
+else:  # pragma: no cover - validated via dedicated tests
+    def _tqdm(**kwargs: Any):
+        return _real_tqdm(**kwargs)
+
+tqdm = _tqdm
+
 
 from xgoal_tutor.ingest.reader import MutableEvent
-from xgoal_tutor.ingest.rows import build_event_rows, build_shot_rows
+from xgoal_tutor.ingest.rows import build_all_rows
 
 
 class StatsBombSQLiteWriter:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._connection = connection
 
-    def write(self, events: Sequence[MutableEvent]) -> None:
-        event_rows = build_event_rows(events)
-        shot_rows, freeze_frame_rows = build_shot_rows(events)
+    def write(
+        self, events: Sequence[MutableEvent], *, show_progress: bool = False
+    ) -> None:
+        progress_bar: Optional[Any] = None
+        progress_callback = None
+
+        if show_progress:
+            total: Optional[int]
+            try:
+                total = len(events)  # type: ignore[arg-type]
+            except TypeError:
+                total = None
+
+            progress_bar = tqdm(
+                total=total,
+                desc="Ingesting events",
+                unit="event",
+                dynamic_ncols=True,
+            )
+            assert progress_bar is not None
+            progress_callback = lambda bar=progress_bar: bar.update(1)
+
+        try:
+            event_rows, shot_rows, freeze_frame_rows = build_all_rows(
+                events, progress_callback
+            )
+        finally:
+            if progress_bar is not None:
+                progress_bar.close()
 
         self._insert_events(event_rows)
         self._insert_shots(shot_rows)
