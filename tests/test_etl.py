@@ -3,15 +3,17 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from xgoal_tutor import etl
+from xgoal_tutor.ingest import loader, reader, rows
 
 
 @pytest.fixture()
-def sample_events(tmp_path: Path) -> Path:
-    events = [
+def sample_event_payload() -> list[dict[str, Any]]:
+    return [
         {
             "id": "pass-1",
             "index": 5,
@@ -102,7 +104,7 @@ def sample_events(tmp_path: Path) -> Path:
             "location": [90.0, 20.0],
             "shot": {
                 "statsbomb_xg": 0.05,
-                "outcome": {"id": 90, "name": "Off T"},
+                "outcome": {"id": 90, "name": "Off Target"},
                 "body_part": {"id": 40, "name": "Left Foot"},
                 "type": {"id": 65, "name": "Free Kick"},
                 "first_time": False,
@@ -114,9 +116,21 @@ def sample_events(tmp_path: Path) -> Path:
             },
         },
     ]
+
+
+@pytest.fixture()
+def sample_events(tmp_path: Path, sample_event_payload: list[dict[str, Any]]) -> Path:
     path = tmp_path / "events.json"
-    path.write_text(json.dumps(events), encoding="utf-8")
+    path.write_text(json.dumps(sample_event_payload), encoding="utf-8")
     return path
+
+
+@pytest.fixture()
+def sample_events_list(
+    sample_event_payload: list[dict[str, Any]]
+) -> list[reader.MutableEvent]:
+    normalised = [dict(event) for event in sample_event_payload]
+    return normalised
 
 
 def test_load_match_events_populates_sqlite(sample_events: Path, tmp_path: Path) -> None:
@@ -166,7 +180,9 @@ def test_load_match_events_populates_sqlite(sample_events: Path, tmp_path: Path)
         assert raw_event["id"] == "shot-1"
 
 
-def test_main_invokes_loader(monkeypatch: pytest.MonkeyPatch, sample_events: Path, tmp_path: Path) -> None:
+def test_main_invokes_loader(
+    monkeypatch: pytest.MonkeyPatch, sample_events: Path, tmp_path: Path
+) -> None:
     database = tmp_path / "cli.sqlite"
     called: dict[str, tuple[Path, Path]] = {}
 
@@ -178,3 +194,35 @@ def test_main_invokes_loader(monkeypatch: pytest.MonkeyPatch, sample_events: Pat
     etl.main([str(sample_events), str(database)])
 
     assert called["args"] == (sample_events, database)
+
+
+def test_reader_validates_input(tmp_path: Path) -> None:
+    events_file = tmp_path / "invalid.json"
+    events_file.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="JSON array"):
+        reader.read_statsbomb_events(events_file)
+
+
+def test_builders_create_expected_rows(sample_events_list: list[reader.MutableEvent]) -> None:
+    event_rows = rows.build_event_rows(sample_events_list)
+    shot_rows, freeze_frame_rows = rows.build_shot_rows(sample_events_list)
+
+    assert {row[0] for row in event_rows} == {"pass-1", "shot-1", "shot-2"}
+    assert len(shot_rows) == 2
+    assert len(freeze_frame_rows) == 2
+
+    open_play_shot = next(row for row in shot_rows if row[0] == "shot-1")
+    assert open_play_shot[21] == "Through Ball"
+    assert open_play_shot[32] == 0
+    assert open_play_shot[39] == 1
+
+
+def test_loader_round_trip(tmp_path: Path, sample_events_list: list[reader.MutableEvent]) -> None:
+    database = tmp_path / "round_trip.sqlite"
+    loader._write_to_database(sample_events_list, database)
+
+    with sqlite3.connect(database) as conn:
+        conn.row_factory = sqlite3.Row
+        stored = conn.execute("SELECT * FROM shots ORDER BY shot_id").fetchall()
+        assert {shot["shot_id"] for shot in stored} == {"shot-1", "shot-2"}
