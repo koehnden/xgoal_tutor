@@ -208,7 +208,7 @@ def test_reader_validates_input(tmp_path: Path) -> None:
 
 
 def test_reader_rejects_non_json_urls() -> None:
-    with pytest.raises(ValueError, match="must point directly"):
+    with pytest.raises(ValueError, match="JSON file or a GitHub directory"):
         reader.read_statsbomb_events("https://example.com/events")
 
 
@@ -237,6 +237,44 @@ def test_reader_downloads_remote_json(
         thread.join()
 
     assert len(events) == len(sample_event_payload)
+
+
+def test_reader_handles_directory(tmp_path: Path, sample_event_payload: list[dict[str, Any]]) -> None:
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+
+    (events_dir / "match_a.json").write_text(
+        json.dumps(sample_event_payload[:1]), encoding="utf-8"
+    )
+    (events_dir / "match_b.json").write_text(
+        json.dumps(sample_event_payload[1:]), encoding="utf-8"
+    )
+
+    events = reader.read_statsbomb_events(events_dir)
+
+    assert {event["id"] for event in events} == {"pass-1", "shot-1", "shot-2"}
+
+
+def test_reader_downloads_github_tree(
+    monkeypatch: pytest.MonkeyPatch, sample_event_payload: list[dict[str, Any]]
+) -> None:
+    payload_a = json.dumps(sample_event_payload[:1])
+    payload_b = json.dumps(sample_event_payload[1:])
+
+    captured: dict[str, tuple[str, str, str, str]] = {}
+
+    def fake_fetch(owner: str, repo: str, ref: str, directory: str) -> list[str]:
+        captured["args"] = (owner, repo, ref, directory)
+        return [payload_a, payload_b]
+
+    monkeypatch.setattr(reader, "_fetch_github_directory_files", fake_fetch)
+
+    events = reader.read_statsbomb_events(
+        "https://github.com/statsbomb/open-data/tree/master/data/events"
+    )
+
+    assert captured["args"] == ("statsbomb", "open-data", "master", "data/events")
+    assert {event["id"] for event in events} == {"pass-1", "shot-1", "shot-2"}
 
 
 def test_builders_create_expected_rows(sample_events_list: list[reader.MutableEvent]) -> None:
