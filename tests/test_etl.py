@@ -1,17 +1,28 @@
 from __future__ import annotations
 
 import json
+import ssl
 import sqlite3
+import threading
+from functools import partial
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from urllib.error import URLError
+
+import xgoal_tutor.ingest.schema as schema_module
+import xgoal_tutor.ingest.writer as writer_module
+
 from xgoal_tutor import etl
+from xgoal_tutor.ingest import loader, reader, rows
 
 
 @pytest.fixture()
-def sample_events(tmp_path: Path) -> Path:
-    events = [
+def sample_event_payload() -> list[dict[str, Any]]:
+    return [
         {
             "id": "pass-1",
             "index": 5,
@@ -102,7 +113,7 @@ def sample_events(tmp_path: Path) -> Path:
             "location": [90.0, 20.0],
             "shot": {
                 "statsbomb_xg": 0.05,
-                "outcome": {"id": 90, "name": "Off T"},
+                "outcome": {"id": 90, "name": "Off Target"},
                 "body_part": {"id": 40, "name": "Left Foot"},
                 "type": {"id": 65, "name": "Free Kick"},
                 "first_time": False,
@@ -114,9 +125,21 @@ def sample_events(tmp_path: Path) -> Path:
             },
         },
     ]
+
+
+@pytest.fixture()
+def sample_events(tmp_path: Path, sample_event_payload: list[dict[str, Any]]) -> Path:
     path = tmp_path / "events.json"
-    path.write_text(json.dumps(events), encoding="utf-8")
+    path.write_text(json.dumps(sample_event_payload), encoding="utf-8")
     return path
+
+
+@pytest.fixture()
+def sample_events_list(
+    sample_event_payload: list[dict[str, Any]]
+) -> list[reader.MutableEvent]:
+    normalised = [dict(event) for event in sample_event_payload]
+    return normalised
 
 
 def test_load_match_events_populates_sqlite(sample_events: Path, tmp_path: Path) -> None:
@@ -166,15 +189,281 @@ def test_load_match_events_populates_sqlite(sample_events: Path, tmp_path: Path)
         assert raw_event["id"] == "shot-1"
 
 
-def test_main_invokes_loader(monkeypatch: pytest.MonkeyPatch, sample_events: Path, tmp_path: Path) -> None:
+def test_main_invokes_loader(
+    monkeypatch: pytest.MonkeyPatch, sample_events: Path, tmp_path: Path
+) -> None:
     database = tmp_path / "cli.sqlite"
-    called: dict[str, tuple[Path, Path]] = {}
+    called: dict[str, tuple[str | Path, Path | str]] = {}
 
-    def fake_loader(events_path: Path, db_path: Path) -> None:
-        called["args"] = (events_path, db_path)
+    def fake_loader(
+        events_path: Path | str, db_path: Path | str, *, show_progress: bool = False
+    ) -> None:
+        called["args"] = (events_path, db_path, show_progress)
 
     monkeypatch.setattr(etl, "load_match_events", fake_loader)
 
     etl.main([str(sample_events), str(database)])
 
-    assert called["args"] == (sample_events, database)
+    assert called["args"] == (str(sample_events), database, True)
+
+
+def test_read_statsbomb_events_raises_on_ssl_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    url = "https://example.com/events.json"
+
+    def fake_urlopen(*_: Any, **__: Any) -> Any:
+        raise URLError(ssl.SSLError("certificate verify failed"))
+
+    monkeypatch.setattr(reader, "urlopen", fake_urlopen)
+
+    with pytest.raises(ConnectionError) as excinfo:
+        reader.read_statsbomb_events(url)
+
+    assert "certificate" in str(excinfo.value).lower()
+
+
+def test_read_statsbomb_events_falls_back_to_unverified_context(
+    monkeypatch: pytest.MonkeyPatch, recwarn: pytest.WarningsRecorder
+) -> None:
+    url = "https://example.com/events.json"
+    attempts: list[int] = []
+
+    class FakeResponse:
+        status = 200
+
+        def read(self) -> bytes:
+            return b"[]"
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *args: Any) -> bool:
+            return False
+
+    def fake_urlopen(*_: Any, context: ssl.SSLContext, **__: Any) -> FakeResponse:
+        attempts.append(context.verify_mode)
+        if context.verify_mode == ssl.CERT_REQUIRED:
+            raise URLError("certificate verify failed")
+        return FakeResponse()
+
+    monkeypatch.setattr(reader, "urlopen", fake_urlopen)
+
+    events = reader.read_statsbomb_events(url)
+
+    assert events == []
+    assert attempts == [ssl.CERT_REQUIRED, ssl.CERT_NONE]
+    assert any("unverified" in str(w.message).lower() for w in recwarn)
+
+
+def test_reader_validates_input(tmp_path: Path) -> None:
+    events_file = tmp_path / "invalid.json"
+    events_file.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="JSON array"):
+        reader.read_statsbomb_events(events_file)
+
+
+def test_reader_rejects_non_json_urls() -> None:
+    with pytest.raises(ValueError, match="JSON file or a GitHub directory"):
+        reader.read_statsbomb_events("https://example.com/events")
+
+
+def test_reader_downloads_remote_json(
+    tmp_path: Path, sample_event_payload: list[dict[str, Any]]
+) -> None:
+    events_file = tmp_path / "remote.json"
+    events_file.write_text(json.dumps(sample_event_payload), encoding="utf-8")
+
+    class SilentHandler(SimpleHTTPRequestHandler):
+        def log_message(self, format: str, *args: Any) -> None:  # pragma: no cover - silence server
+            return
+
+    handler = partial(SilentHandler, directory=str(tmp_path))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        host, port = server.server_address
+        url = f"http://{host}:{port}/{events_file.name}"
+        events = reader.read_statsbomb_events(url)
+    finally:
+        server.shutdown()
+        thread.join()
+
+    assert len(events) == len(sample_event_payload)
+
+
+def test_reader_handles_directory(tmp_path: Path, sample_event_payload: list[dict[str, Any]]) -> None:
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+
+    (events_dir / "match_a.json").write_text(
+        json.dumps(sample_event_payload[:1]), encoding="utf-8"
+    )
+    (events_dir / "match_b.json").write_text(
+        json.dumps(sample_event_payload[1:]), encoding="utf-8"
+    )
+
+    events = reader.read_statsbomb_events(events_dir)
+
+    assert {event["id"] for event in events} == {"pass-1", "shot-1", "shot-2"}
+
+
+def test_reader_downloads_github_tree(
+    monkeypatch: pytest.MonkeyPatch, sample_event_payload: list[dict[str, Any]]
+) -> None:
+    payload_a = json.dumps(sample_event_payload[:1])
+    payload_b = json.dumps(sample_event_payload[1:])
+
+    listings = {
+        "data/events": [
+            {"type": "dir", "path": "data/events/competition_a"},
+            {"type": "dir", "path": "data/events/competition_b"},
+        ],
+        "data/events/competition_a": [
+            {
+                "type": "file",
+                "path": "data/events/competition_a/match_a.json",
+                "name": "match_a.json",
+                "download_url": "https://example.com/match_a.json",
+            }
+        ],
+        "data/events/competition_b": [
+            {"type": "dir", "path": "data/events/competition_b/round"}
+        ],
+        "data/events/competition_b/round": [
+            {
+                "type": "file",
+                "path": "data/events/competition_b/round/match_b.json",
+                "name": "match_b.json",
+                "download_url": "https://example.com/match_b.json",
+            }
+        ],
+    }
+
+    captured_calls: list[tuple[str, str, str, str]] = []
+    downloaded_urls: list[str] = []
+
+    def fake_list(owner: str, repo: str, ref: str, directory: str) -> list[dict[str, Any]]:
+        captured_calls.append((owner, repo, ref, directory))
+        return listings.get(directory, [])
+
+    def fake_download(url: str) -> str:
+        downloaded_urls.append(url)
+        if url.endswith("match_a.json"):
+            return payload_a
+        if url.endswith("match_b.json"):
+            return payload_b
+        raise AssertionError(f"Unexpected download URL: {url}")
+
+    monkeypatch.setattr(reader, "_list_github_directory", fake_list)
+    monkeypatch.setattr(reader, "_download_url", fake_download)
+
+    events = reader.read_statsbomb_events(
+        "https://github.com/statsbomb/open-data/tree/master/data/events"
+    )
+
+    assert captured_calls[0] == (
+        "statsbomb",
+        "open-data",
+        "master",
+        "data/events",
+    )
+    assert downloaded_urls == [
+        "https://example.com/match_a.json",
+        "https://example.com/match_b.json",
+    ]
+    assert {event["id"] for event in events} == {"pass-1", "shot-1", "shot-2"}
+
+
+def test_reader_github_tree_without_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_list(owner: str, repo: str, ref: str, directory: str) -> list[dict[str, Any]]:
+        if directory == "data/events":
+            return [{"type": "dir", "path": "data/events/empty"}]
+        return []
+
+    monkeypatch.setattr(reader, "_list_github_directory", fake_list)
+
+    with pytest.raises(FileNotFoundError, match="No JSON files found"):
+        reader.read_statsbomb_events(
+            "https://github.com/statsbomb/open-data/tree/master/data/events"
+        )
+
+
+def test_builders_create_expected_rows(sample_events_list: list[reader.MutableEvent]) -> None:
+    event_rows = rows.build_event_rows(sample_events_list)
+    shot_rows, freeze_frame_rows = rows.build_shot_rows(sample_events_list)
+
+    assert {row[0] for row in event_rows} == {"pass-1", "shot-1", "shot-2"}
+    assert len(shot_rows) == 2
+    assert len(freeze_frame_rows) == 2
+
+    open_play_shot = next(row for row in shot_rows if row[0] == "shot-1")
+    assert open_play_shot[21] == "Through Ball"
+    assert open_play_shot[32] == 0
+    assert open_play_shot[39] == 1
+
+
+def test_build_all_rows_reports_progress(
+    sample_events_list: list[reader.MutableEvent],
+) -> None:
+    calls: list[int] = []
+
+    def progress() -> None:
+        calls.append(1)
+
+    rows.build_all_rows(sample_events_list, progress)
+
+    assert len(calls) == len(sample_events_list)
+
+
+def test_build_all_rows_matches_component_builders(
+    sample_events_list: list[reader.MutableEvent],
+) -> None:
+    event_rows, shot_rows, freeze_frame_rows = rows.build_all_rows(sample_events_list)
+
+    assert event_rows == rows.build_event_rows(sample_events_list)
+    assert (shot_rows, freeze_frame_rows) == rows.build_shot_rows(sample_events_list)
+
+
+def test_loader_round_trip(tmp_path: Path, sample_events_list: list[reader.MutableEvent]) -> None:
+    database = tmp_path / "round_trip.sqlite"
+    loader._write_to_database(sample_events_list, database)
+
+    with sqlite3.connect(database) as conn:
+        conn.row_factory = sqlite3.Row
+        stored = conn.execute("SELECT * FROM shots ORDER BY shot_id").fetchall()
+        assert {shot["shot_id"] for shot in stored} == {"shot-1", "shot-2"}
+
+
+def test_writer_emits_progress_updates(
+    monkeypatch: pytest.MonkeyPatch, sample_events_list: list[reader.MutableEvent]
+) -> None:
+    updates: list[int] = []
+
+    class FakeTqdm:
+        def __init__(self, *, total: int | None, desc: str, unit: str, dynamic_ncols: bool) -> None:
+            self.total = total
+            self.desc = desc
+            self.unit = unit
+            self.dynamic_ncols = dynamic_ncols
+
+        def update(self, amount: int) -> None:
+            updates.append(amount)
+
+        def close(self) -> None:
+            updates.append(0)
+
+    monkeypatch.setattr(writer_module, "tqdm", lambda **kwargs: FakeTqdm(**kwargs))
+
+    with sqlite3.connect(":memory:") as connection:
+        schema_module.initialise_schema(connection)
+        writer_module.StatsBombSQLiteWriter(connection).write(
+            sample_events_list, show_progress=True
+        )
+
+    assert updates.count(1) == len(sample_events_list)
+    assert updates[-1] == 0
