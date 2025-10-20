@@ -22,6 +22,7 @@ def load_match_events(events_path: Path, db_path: Path) -> None:
 
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 5000;")
         _initialise_schema(connection)
         _insert_events(connection, events, match_teams)
         _insert_shots_and_freeze_frames(connection, events, match_teams)

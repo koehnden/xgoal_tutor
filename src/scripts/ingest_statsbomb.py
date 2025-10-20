@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import Iterable, Iterator, List, Optional
+from typing import Iterable, Iterator, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from xgoal_tutor.etl import load_match_events
@@ -69,25 +71,54 @@ def iter_event_files(input_arg: str) -> Iterator[Path]:
     raise ValueError(f"Unsupported input: {input_arg}")
 
 
+def _default_worker_count() -> int:
+    cpu_count = os.cpu_count() or 1
+    return max(4, min(32, cpu_count * 2))
+
+
+def _process_event_file(events_path: Path, db_path: Path) -> Tuple[bool, Path, Optional[Exception]]:
+    try:
+        load_match_events(events_path, db_path)
+        return True, events_path, None
+    except Exception as exc:  # pragma: no cover - propagated to caller
+        return False, events_path, exc
+    finally:
+        if events_path.name.startswith("events_") and events_path.parent == Path(tempfile.gettempdir()):
+            with contextlib.suppress(Exception):
+                events_path.unlink(missing_ok=True)
+
+
 def ingest(inputs: List[str], db_path: Path, stop_on_error: bool = False) -> None:
     processed = 0
     failures: List[str] = []
 
-    for input_arg in inputs:
-        for events_path in iter_event_files(input_arg):
+    futures = {}
+    with ThreadPoolExecutor(max_workers=_default_worker_count()) as executor:
+        for input_arg in inputs:
+            for events_path in iter_event_files(input_arg):
+                future = executor.submit(_process_event_file, events_path, db_path)
+                futures[future] = events_path
+
+        for future in as_completed(futures):
             try:
-                load_match_events(events_path, db_path)
-                processed += 1
-            except Exception as exc:
-                msg = f"✗ Failed for {events_path}: {exc}"
+                success, events_path, exc = future.result()
+            except Exception as unexpected:
+                msg = f"✗ Failed for {futures[future]}: {unexpected}"
                 print(msg, file=sys.stderr)
                 failures.append(msg)
                 if stop_on_error:
                     raise
-            finally:
-                if events_path.name.startswith("events_") and events_path.parent == Path(tempfile.gettempdir()):
-                    with contextlib.suppress(Exception):
-                        events_path.unlink(missing_ok=True)
+                continue
+
+            if success:
+                processed += 1
+                continue
+
+            msg = f"✗ Failed for {events_path}: {exc}"
+            print(msg, file=sys.stderr)
+            failures.append(msg)
+            if stop_on_error and exc is not None:
+                raise exc
 
     print(f"\nDone. Files processed: {processed}. Database: {db_path}")
     if failures:
