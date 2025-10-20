@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from xgoal_tutor.etl import load_match_events
 
-from .download_helper import _download_github_directory_jsons
+from xgoal_tutor.etl.download_helper import _download_github_directory_jsons
 
 
 # ---------- Input detection ----------

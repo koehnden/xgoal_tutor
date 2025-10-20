@@ -10,7 +10,7 @@ from typing import Iterator
 
 from tqdm import tqdm
 
-from .http_helper import _get_bytes, _get_json
+from xgoal_tutor.etl.http_helper import _get_bytes, _get_json
 
 
 def _download_to_tempfile(url: str) -> Path:
