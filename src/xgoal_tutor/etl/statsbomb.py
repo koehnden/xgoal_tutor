@@ -10,7 +10,9 @@ from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence,
 MutableEvent = MutableMapping[str, Any]
 
 
-def load_match_events(events_path: Path, db_path: Path) -> None:
+def load_match_events(
+    events_path: Path, db_path: Path, *, connection: Optional[sqlite3.Connection] = None
+) -> None:
     events = _read_event_file(events_path)
     match_id_override = _derive_match_id_from_path(events_path)
     if match_id_override is not None:
@@ -20,12 +22,23 @@ def load_match_events(events_path: Path, db_path: Path) -> None:
 
     match_teams = _derive_match_teams(events)
 
-    with sqlite3.connect(db_path) as connection:
-        connection.row_factory = sqlite3.Row
-        _initialise_schema(connection)
-        _insert_events(connection, events, match_teams)
-        _insert_shots_and_freeze_frames(connection, events, match_teams)
-        connection.commit()
+    if connection is None:
+        with sqlite3.connect(db_path) as owned_connection:
+            _load_into_connection(owned_connection, events, match_teams)
+            owned_connection.commit()
+    else:
+        _load_into_connection(connection, events, match_teams)
+
+
+def _load_into_connection(
+    connection: sqlite3.Connection,
+    events: Sequence[MutableEvent],
+    match_teams: Mapping[int, Set[int]],
+) -> None:
+    connection.row_factory = sqlite3.Row
+    _initialise_schema(connection)
+    _insert_events(connection, events, match_teams)
+    _insert_shots_and_freeze_frames(connection, events, match_teams)
 
 
 def _read_event_file(events_path: Path) -> List[MutableEvent]:

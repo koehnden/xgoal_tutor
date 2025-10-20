@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -73,21 +74,23 @@ def ingest(inputs: List[str], db_path: Path, stop_on_error: bool = False) -> Non
     processed = 0
     failures: List[str] = []
 
-    for input_arg in inputs:
-        for events_path in iter_event_files(input_arg):
-            try:
-                load_match_events(events_path, db_path)
-                processed += 1
-            except Exception as exc:
-                msg = f"✗ Failed for {events_path}: {exc}"
-                print(msg, file=sys.stderr)
-                failures.append(msg)
-                if stop_on_error:
-                    raise
-            finally:
-                if events_path.name.startswith("events_") and events_path.parent == Path(tempfile.gettempdir()):
-                    with contextlib.suppress(Exception):
-                        events_path.unlink(missing_ok=True)
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        for input_arg in inputs:
+            for events_path in iter_event_files(input_arg):
+                try:
+                    load_match_events(events_path, db_path, connection=connection)
+                    processed += 1
+                except Exception as exc:
+                    msg = f"✗ Failed for {events_path}: {exc}"
+                    print(msg, file=sys.stderr)
+                    failures.append(msg)
+                    if stop_on_error:
+                        raise
+                finally:
+                    if events_path.name.startswith("events_") and events_path.parent == Path(tempfile.gettempdir()):
+                        with contextlib.suppress(Exception):
+                            events_path.unlink(missing_ok=True)
 
     print(f"\nDone. Files processed: {processed}. Database: {db_path}")
     if failures:
