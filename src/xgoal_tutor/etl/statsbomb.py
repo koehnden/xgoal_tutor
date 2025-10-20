@@ -7,12 +7,14 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
 
-from xgoal_tutor.etl.schema import CREATE_INDEX_STATEMENTS, CREATE_TABLE_STATEMENTS
+from xgoal_tutor.etl.schema import CREATE_INDEX_STATEMENTS, CREATE_TABLE_STATEMENTS, SHOT_COLUMNS
 
 MutableEvent = MutableMapping[str, Any]
 
 
-def load_match_events(events_path: Path, db_path: Path) -> None:
+def load_match_events(
+    events_path: Path, db_path: Path, *, connection: Optional[sqlite3.Connection] = None
+) -> None:
     events = _read_event_file(events_path)
     match_id_override = _derive_match_id_from_path(events_path)
     if match_id_override is not None:
@@ -22,12 +24,23 @@ def load_match_events(events_path: Path, db_path: Path) -> None:
 
     match_teams = _derive_match_teams(events)
 
-    with sqlite3.connect(db_path) as connection:
-        connection.row_factory = sqlite3.Row
-        _initialise_schema(connection)
-        _insert_events(connection, events, match_teams)
-        _insert_shots_and_freeze_frames(connection, events, match_teams)
-        connection.commit()
+    if connection is None:
+        with sqlite3.connect(db_path) as owned_connection:
+            _load_into_connection(owned_connection, events, match_teams)
+            owned_connection.commit()
+    else:
+        _load_into_connection(connection, events, match_teams)
+
+
+def _load_into_connection(
+    connection: sqlite3.Connection,
+    events: Sequence[MutableEvent],
+    match_teams: Mapping[int, Set[int]],
+) -> None:
+    connection.row_factory = sqlite3.Row
+    _initialise_schema(connection)
+    _insert_events(connection, events, match_teams)
+    _insert_shots_and_freeze_frames(connection, events, match_teams)
 
 
 def _read_event_file(events_path: Path) -> List[MutableEvent]:
@@ -125,51 +138,6 @@ def _insert_events(
         """,
         event_rows,
     )
-
-
-SHOT_COLUMNS: Tuple[str, ...] = (
-    "shot_id",
-    "match_id",
-    "team_id",
-    "opponent_team_id",
-    "player_id",
-    "possession",
-    "possession_team_id",
-    "period",
-    "minute",
-    "second",
-    "timestamp",
-    "play_pattern",
-    "start_x",
-    "start_y",
-    "end_x",
-    "end_y",
-    "end_z",
-    "outcome",
-    "body_part",
-    "technique",
-    "shot_type",
-    "assist_type",
-    "key_pass_id",
-    "statsbomb_xg",
-    "first_time",
-    "one_on_one",
-    "open_goal",
-    "follows_dribble",
-    "deflected",
-    "aerial_won",
-    "rebound",
-    "under_pressure",
-    "is_set_piece",
-    "is_corner",
-    "is_free_kick",
-    "is_penalty",
-    "is_throw_in",
-    "is_kick_off",
-    "is_own_goal",
-    "freeze_frame_available",
-    "freeze_frame_count",
-)
 
 
 def _insert_shots_and_freeze_frames(

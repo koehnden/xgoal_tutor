@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import logging
+import shutil
+import tarfile
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
 from typing import Iterator
+from urllib.request import Request, urlopen
 
 from tqdm import tqdm
 
-from xgoal_tutor.etl.http_helper import _get_bytes, _get_json
+from xgoal_tutor.etl.http_helper import _get_bytes, _get_json, _headers, _ssl_context
 
 
 logger = logging.getLogger(__name__)
@@ -59,9 +64,15 @@ def _list_events_with_trees_api(owner: str, repo: str, ref: str, subpath: str) -
 
 def download_github_directory_jsons(owner: str, repo: str, ref: str, subpath: str) -> Iterator[Path]:
     """
-    Preferred: list with Trees API, then sequentially download each raw JSON.
-    Fallback: download repo ZIP and extract only subpath/*.json.
+    Preferred: stream the repository tarball and extract subpath/*.json on the fly.
+    Fallbacks: per-file downloads (Trees API) and repository ZIP extraction.
     """
+
+    try:
+        yield from _stream_tarball_events(owner, repo, ref, subpath)
+        return
+    except Exception as e:
+        logger.warning(f"[warn] Tarball streaming failed; trying per-file download: {e}", file=sys.stderr)
 
     try:
         paths = _list_events_with_trees_api(owner, repo, ref, subpath)
@@ -85,10 +96,48 @@ def download_github_directory_jsons(owner: str, repo: str, ref: str, subpath: st
         yield Path(tmp.name)
 
 
+def _stream_tarball_events(owner: str, repo: str, ref: str, subpath: str) -> Iterator[Path]:
+    tar_url = f"https://codeload.github.com/{owner}/{repo}/tar.gz/{ref}"
+    req = Request(tar_url, headers=_headers())
+    with contextlib.closing(urlopen(req, context=_ssl_context(), timeout=60)) as resp:
+        status = getattr(resp, "status", 200)
+        if status != 200:
+            raise RuntimeError(f"HTTP {status} for {tar_url}")
+
+        mode = "r|gz"
+        prefix_root = subpath.strip("/")
+        prefix = f"{repo}-{ref}/"
+        if prefix_root:
+            prefix += prefix_root.rstrip("/") + "/"
+
+        with tarfile.open(fileobj=resp, mode=mode) as tf, tqdm(
+            desc="Streaming events", unit="file"
+        ) as progress:
+            for member in tf:
+                if not member.isfile():
+                    continue
+
+                name = member.name
+                if not name.startswith(prefix) or not name.endswith(".json"):
+                    continue
+
+                extracted = tf.extractfile(member)
+                if extracted is None:
+                    continue
+
+                tmp = tempfile.NamedTemporaryFile(prefix="events_", suffix=".json", delete=False)
+                with tmp, contextlib.closing(extracted):
+                    shutil.copyfileobj(extracted, tmp)
+
+                progress.update(1)
+                yield Path(tmp.name)
+
+
 __all__ = [
-    "_download_github_directory_jsons",
+    "download_github_directory_jsons",
     "_download_to_tempfile",
     "_list_events_with_trees_api",
     "_raw_url",
+    "_stream_tarball_events",
 ]
 
