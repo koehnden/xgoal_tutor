@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
-import sys
 import tempfile
 from pathlib import Path
 from typing import Iterable, Iterator, List, Optional, Tuple
@@ -12,6 +12,9 @@ from urllib.parse import urlparse
 
 from xgoal_tutor.etl import load_match_events
 from xgoal_tutor.etl.download_helper import download_github_directory_jsons
+
+
+logger = logging.getLogger(__name__)
 
 
 def is_url(s: str) -> bool:
@@ -104,7 +107,7 @@ def ingest(inputs: List[str], db_path: Path, stop_on_error: bool = False) -> Non
                 success, events_path, exc = future.result()
             except Exception as unexpected:
                 msg = f"✗ Failed for {futures[future]}: {unexpected}"
-                print(msg, file=sys.stderr)
+                logger.error(msg)
                 failures.append(msg)
                 if stop_on_error:
                     raise
@@ -115,14 +118,16 @@ def ingest(inputs: List[str], db_path: Path, stop_on_error: bool = False) -> Non
                 continue
 
             msg = f"✗ Failed for {events_path}: {exc}"
-            print(msg, file=sys.stderr)
+            logger.error(msg)
             failures.append(msg)
             if stop_on_error and exc is not None:
                 raise exc
 
-    print(f"\nDone. Files processed: {processed}. Database: {db_path}")
+    logger.info("Done. Files processed: %s. Database: %s", processed, db_path)
     if failures:
-        print("Some files failed:", *failures, sep="\n- ")
+        logger.error("Some files failed:")
+        for failure in failures:
+            logger.error("- %s", failure)
 
 
 def main(argv: Optional[Iterable[str]] = None) -> None:
@@ -157,6 +162,8 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
 
     db_path: Path = args.database.expanduser().resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     ingest(args.input, db_path, stop_on_error=args.stop_on_error)
 
