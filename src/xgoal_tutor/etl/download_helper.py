@@ -3,9 +3,10 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import logging
 import shutil
-import sys
 import tarfile
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
@@ -15,6 +16,9 @@ from urllib.request import Request, urlopen
 from tqdm import tqdm
 
 from xgoal_tutor.etl.http_helper import _get_bytes, _get_json, _headers, _ssl_context
+
+
+logger = logging.getLogger(__name__)
 
 
 def _download_to_tempfile(url: str) -> Path:
@@ -68,7 +72,7 @@ def download_github_directory_jsons(owner: str, repo: str, ref: str, subpath: st
         yield from _stream_tarball_events(owner, repo, ref, subpath)
         return
     except Exception as e:
-        print(f"[warn] Tarball streaming failed; trying per-file download: {e}", file=sys.stderr)
+        logger.warning(f"[warn] Tarball streaming failed; trying per-file download: {e}", file=sys.stderr)
 
     try:
         paths = _list_events_with_trees_api(owner, repo, ref, subpath)
@@ -76,8 +80,8 @@ def download_github_directory_jsons(owner: str, repo: str, ref: str, subpath: st
             for rel in tqdm(paths, desc="Downloading events", unit="file"):
                 yield _download_to_tempfile(_raw_url(owner, repo, ref, rel))
             return
-    except Exception as e:
-        print(f"[warn] Trees API listing failed; trying ZIP fallback: {e}", file=sys.stderr)
+    except Exception as exc:
+        logger.warning("Trees API listing failed; trying ZIP fallback", exc_info=exc)
 
     zip_url = f"https://codeload.github.com/{owner}/{repo}/zip/refs/heads/{ref}"
     data = _get_bytes(zip_url)
@@ -130,7 +134,7 @@ def _stream_tarball_events(owner: str, repo: str, ref: str, subpath: str) -> Ite
 
 
 __all__ = [
-    "_download_github_directory_jsons",
+    "download_github_directory_jsons",
     "_download_to_tempfile",
     "_list_events_with_trees_api",
     "_raw_url",
