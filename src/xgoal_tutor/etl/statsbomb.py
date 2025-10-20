@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
 
-from xgoal_tutor.etl.schema import CREATE_INDEX_STATEMENTS, CREATE_TABLE_STATEMENTS
+from xgoal_tutor.etl.schema import CREATE_INDEX_STATEMENTS, CREATE_TABLE_STATEMENTS, SHOT_COLUMNS
 
 MutableEvent = MutableMapping[str, Any]
 
@@ -138,51 +138,6 @@ def _insert_events(
         """,
         event_rows,
     )
-
-
-SHOT_COLUMNS: Tuple[str, ...] = (
-    "shot_id",
-    "match_id",
-    "team_id",
-    "opponent_team_id",
-    "player_id",
-    "possession",
-    "possession_team_id",
-    "period",
-    "minute",
-    "second",
-    "timestamp",
-    "play_pattern",
-    "start_x",
-    "start_y",
-    "end_x",
-    "end_y",
-    "end_z",
-    "outcome",
-    "body_part",
-    "technique",
-    "shot_type",
-    "assist_type",
-    "key_pass_id",
-    "statsbomb_xg",
-    "first_time",
-    "one_on_one",
-    "open_goal",
-    "follows_dribble",
-    "deflected",
-    "aerial_won",
-    "rebound",
-    "under_pressure",
-    "is_set_piece",
-    "is_corner",
-    "is_free_kick",
-    "is_penalty",
-    "is_throw_in",
-    "is_kick_off",
-    "is_own_goal",
-    "freeze_frame_available",
-    "freeze_frame_count",
-)
 
 
 def _insert_shots_and_freeze_frames(
