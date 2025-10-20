@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import sys
+import logging
 import tempfile
 from pathlib import Path
 from typing import Iterable, Iterator, List, Optional
@@ -10,6 +10,9 @@ from urllib.parse import urlparse
 
 from xgoal_tutor.etl import load_match_events
 from xgoal_tutor.etl.download_helper import download_github_directory_jsons
+
+
+logger = logging.getLogger(__name__)
 
 
 def is_url(s: str) -> bool:
@@ -80,7 +83,7 @@ def ingest(inputs: List[str], db_path: Path, stop_on_error: bool = False) -> Non
                 processed += 1
             except Exception as exc:
                 msg = f"✗ Failed for {events_path}: {exc}"
-                print(msg, file=sys.stderr)
+                logger.error(msg, exc_info=exc)
                 failures.append(msg)
                 if stop_on_error:
                     raise
@@ -89,9 +92,10 @@ def ingest(inputs: List[str], db_path: Path, stop_on_error: bool = False) -> Non
                     with contextlib.suppress(Exception):
                         events_path.unlink(missing_ok=True)
 
-    print(f"\nDone. Files processed: {processed}. Database: {db_path}")
+    logger.info("Done. Files processed: %s. Database: %s", processed, db_path)
     if failures:
-        print("Some files failed:", *failures, sep="\n- ")
+        formatted_failures = "\n- ".join(failures)
+        logger.warning("Some files failed:\n- %s", formatted_failures)
 
 
 def main(argv: Optional[Iterable[str]] = None) -> None:
