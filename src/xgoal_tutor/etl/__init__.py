@@ -5,7 +5,7 @@ import hashlib
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
 
 MutableEvent = MutableMapping[str, Any]
 
@@ -18,11 +18,13 @@ def load_match_events(events_path: Path, db_path: Path) -> None:
             if event.get("match_id") is None:
                 event["match_id"] = match_id_override
 
+    match_teams = _derive_match_teams(events)
+
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
         _initialise_schema(connection)
-        _insert_events(connection, events)
-        _insert_shots_and_freeze_frames(connection, events)
+        _insert_events(connection, events, match_teams)
+        _insert_shots_and_freeze_frames(connection, events, match_teams)
         connection.commit()
 
 
@@ -174,18 +176,27 @@ def _initialise_schema(connection: sqlite3.Connection) -> None:
     )
 
 
-def _insert_events(connection: sqlite3.Connection, events: Sequence[MutableEvent]) -> None:
+def _insert_events(
+    connection: sqlite3.Connection,
+    events: Sequence[MutableEvent],
+    match_teams: Mapping[int, Set[int]],
+) -> None:
     event_rows = []
     for event in events:
         event_id = str(event.get("id"))
         if not event_id:
             continue
+        match_id = _get_int(event.get("match_id"))
+        team_id = _get_nested_int(event, ("team", "id"))
+        opponent_team_id = _get_nested_int(event, ("opponent", "id"))
+        if opponent_team_id is None:
+            opponent_team_id = _infer_opponent_team_id(match_id, team_id, match_teams)
         row = (
             event_id,
-            _get_int(event.get("match_id")),
-            _get_nested_int(event, ("team", "id")),
+            match_id,
+            team_id,
             _get_nested_int(event, ("player", "id")),
-            _get_nested_int(event, ("opponent", "id")),
+            opponent_team_id,
             _get_int(event.get("possession")),
             _get_int(event.get("period")),
             _get_int(event.get("minute")),
@@ -213,7 +224,9 @@ def _insert_events(connection: sqlite3.Connection, events: Sequence[MutableEvent
 
 
 def _insert_shots_and_freeze_frames(
-    connection: sqlite3.Connection, events: Sequence[MutableEvent]
+    connection: sqlite3.Connection,
+    events: Sequence[MutableEvent],
+    match_teams: Mapping[int, Set[int]],
 ) -> None:
     shots = []
     freeze_frames: List[Tuple[str, Optional[int], Optional[str], Optional[str], int, int, Optional[float], Optional[float]]] = []
@@ -234,12 +247,18 @@ def _insert_shots_and_freeze_frames(
         assist_type = _derive_assist_type(shot.get("key_pass_id"), events_by_id)
         outcome = _get_nested_str(shot, ("outcome", "name"))
 
+        match_id = _get_int(event.get("match_id"))
+        team_id = _get_nested_int(event, ("team", "id"))
+        opponent_team_id = _get_nested_int(event, ("opponent", "id"))
+        if opponent_team_id is None:
+            opponent_team_id = _infer_opponent_team_id(match_id, team_id, match_teams)
+
         shots.append(
             (
                 shot_id,
-                _get_int(event.get("match_id")),
-                _get_nested_int(event, ("team", "id")),
-                _get_nested_int(event, ("opponent", "id")),
+                match_id,
+                team_id,
+                opponent_team_id,
                 _get_nested_int(event, ("player", "id")),
                 _get_int(event.get("possession")),
                 _get_nested_int(event, ("possession_team", "id")),
@@ -407,6 +426,31 @@ def _get_nested_value(data: Any, path: Sequence[str]) -> Any:
             return None
         current = current.get(key)
     return current
+
+
+def _derive_match_teams(events: Sequence[MutableEvent]) -> Dict[int, Set[int]]:
+    match_teams: Dict[int, Set[int]] = {}
+    for event in events:
+        match_id = _get_int(event.get("match_id"))
+        team_id = _get_nested_int(event, ("team", "id"))
+        if match_id is None or team_id is None:
+            continue
+        match_teams.setdefault(match_id, set()).add(team_id)
+    return match_teams
+
+
+def _infer_opponent_team_id(
+    match_id: Optional[int], team_id: Optional[int], match_teams: Mapping[int, Set[int]]
+) -> Optional[int]:
+    if match_id is None or team_id is None:
+        return None
+    teams = match_teams.get(match_id)
+    if not teams or team_id not in teams or len(teams) < 2:
+        return None
+    opponents = [other for other in teams if other != team_id]
+    if len(opponents) == 1:
+        return opponents[0]
+    return None
 
 
 def _get_str(value: Any) -> Optional[str]:
