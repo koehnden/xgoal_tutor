@@ -5,7 +5,7 @@ import hashlib
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
 
 MutableEvent = MutableMapping[str, Any]
 
@@ -175,17 +175,20 @@ def _initialise_schema(connection: sqlite3.Connection) -> None:
 
 
 def _insert_events(connection: sqlite3.Connection, events: Sequence[MutableEvent]) -> None:
+    teams_by_match = _map_teams_by_match(events)
     event_rows = []
     for event in events:
         event_id = str(event.get("id"))
         if not event_id:
             continue
+        match_id = _get_int(event.get("match_id"))
+        team_id = _get_nested_int(event, ("team", "id"))
         row = (
             event_id,
-            _get_int(event.get("match_id")),
-            _get_nested_int(event, ("team", "id")),
+            match_id,
+            team_id,
             _get_nested_int(event, ("player", "id")),
-            _get_nested_int(event, ("opponent", "id")),
+            _infer_opponent_team_id(match_id, team_id, teams_by_match),
             _get_int(event.get("possession")),
             _get_int(event.get("period")),
             _get_int(event.get("minute")),
@@ -215,6 +218,7 @@ def _insert_events(connection: sqlite3.Connection, events: Sequence[MutableEvent
 def _insert_shots_and_freeze_frames(
     connection: sqlite3.Connection, events: Sequence[MutableEvent]
 ) -> None:
+    teams_by_match = _map_teams_by_match(events)
     shots = []
     freeze_frames: List[Tuple[str, Optional[int], Optional[str], Optional[str], int, int, Optional[float], Optional[float]]] = []
     events_by_id = {str(event.get("id")): event for event in events if event.get("id")}
@@ -234,12 +238,14 @@ def _insert_shots_and_freeze_frames(
         assist_type = _derive_assist_type(shot.get("key_pass_id"), events_by_id)
         outcome = _get_nested_str(shot, ("outcome", "name"))
 
+        match_id = _get_int(event.get("match_id"))
+        team_id = _get_nested_int(event, ("team", "id"))
         shots.append(
             (
                 shot_id,
-                _get_int(event.get("match_id")),
-                _get_nested_int(event, ("team", "id")),
-                _get_nested_int(event, ("opponent", "id")),
+                match_id,
+                team_id,
+                _infer_opponent_team_id(match_id, team_id, teams_by_match),
                 _get_nested_int(event, ("player", "id")),
                 _get_int(event.get("possession")),
                 _get_nested_int(event, ("possession_team", "id")),
@@ -329,6 +335,31 @@ def _insert_shots_and_freeze_frames(
         """,
         freeze_frames,
     )
+
+
+def _map_teams_by_match(events: Sequence[MutableEvent]) -> Dict[int, Set[int]]:
+    teams_by_match: Dict[int, Set[int]] = {}
+    for event in events:
+        match_id = _get_int(event.get("match_id"))
+        team_id = _get_nested_int(event, ("team", "id"))
+        if match_id is None or team_id is None:
+            continue
+        teams_by_match.setdefault(match_id, set()).add(team_id)
+    return teams_by_match
+
+
+def _infer_opponent_team_id(
+    match_id: Optional[int], team_id: Optional[int], teams_by_match: Mapping[int, Set[int]]
+) -> Optional[int]:
+    if match_id is None or team_id is None:
+        return None
+    teams = teams_by_match.get(match_id)
+    if not teams or len(teams) != 2:
+        return None
+    opponents = [candidate for candidate in teams if candidate != team_id]
+    if len(opponents) != 1:
+        return None
+    return opponents[0]
 
 
 def _derive_assist_type(
