@@ -9,11 +9,8 @@ from typing import Iterable, Iterator, List, Optional
 from urllib.parse import urlparse
 
 from xgoal_tutor.etl import load_match_events
+from xgoal_tutor.etl.download_helper import download_github_directory_jsons
 
-from xgoal_tutor.etl.download_helper import _download_github_directory_jsons
-
-
-# ---------- Input detection ----------
 
 def is_url(s: str) -> bool:
     try:
@@ -39,8 +36,6 @@ def _parse_github_tree_url(url: str) -> Optional[tuple[str, str, str, str]]:
     return None
 
 
-# ---------- File iterator for all input modes ----------
-
 def iter_event_files(input_arg: str) -> Iterator[Path]:
     """
     Yields Path objects for JSON files to process, given:
@@ -53,7 +48,7 @@ def iter_event_files(input_arg: str) -> Iterator[Path]:
         owner, repo, ref, subpath = gh
         if not subpath:
             subpath = "data/events"
-        yield from _download_github_directory_jsons(owner, repo, ref, subpath)
+        yield from download_github_directory_jsons(owner, repo, ref, subpath)
         return
 
     p = Path(input_arg).expanduser().resolve()
@@ -73,8 +68,6 @@ def iter_event_files(input_arg: str) -> Iterator[Path]:
 
     raise ValueError(f"Unsupported input: {input_arg}")
 
-
-# ---------- Main ingest loop (sequential, clear) ----------
 
 def ingest(inputs: List[str], db_path: Path, stop_on_error: bool = False) -> None:
     processed = 0
@@ -101,8 +94,6 @@ def ingest(inputs: List[str], db_path: Path, stop_on_error: bool = False) -> Non
         print("Some files failed:", *failures, sep="\n- ")
 
 
-# ---------- CLI ----------
-
 def main(argv: Optional[Iterable[str]] = None) -> None:
     parser = argparse.ArgumentParser(
         prog="xgoal-ingest",
@@ -122,7 +113,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     )
     parser.add_argument(
         "-o", "--database",
-        default="xgoal_tutor.sqlite",
+        default="xgoal-db.sqlite",
         type=Path,
         help="SQLite database path to write to (default: ./xgoal_tutor.sqlite)"
     )

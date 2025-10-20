@@ -54,7 +54,7 @@ def _list_events_with_trees_api(owner: str, repo: str, ref: str, subpath: str) -
     return paths
 
 
-def _download_github_directory_jsons(owner: str, repo: str, ref: str, subpath: str) -> Iterator[Path]:
+def download_github_directory_jsons(owner: str, repo: str, ref: str, subpath: str) -> Iterator[Path]:
     """
     Preferred: list with Trees API, then sequentially download each raw JSON.
     Fallback: download repo ZIP and extract only subpath/*.json.
