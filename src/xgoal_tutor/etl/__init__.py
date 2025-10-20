@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -11,6 +12,11 @@ MutableEvent = MutableMapping[str, Any]
 
 def load_match_events(events_path: Path, db_path: Path) -> None:
     events = _read_event_file(events_path)
+    match_id_override = _derive_match_id_from_path(events_path)
+    if match_id_override is not None:
+        for event in events:
+            if event.get("match_id") is None:
+                event["match_id"] = match_id_override
 
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
@@ -35,6 +41,29 @@ def _read_event_file(events_path: Path) -> List[MutableEvent]:
             raise ValueError("Each event must be represented as a JSON object")
         normalised.append(dict(item))
     return normalised
+
+
+def _derive_match_id_from_path(events_path: Path) -> Optional[int]:
+    """Derive a stable match identifier from the filename when absent in data."""
+
+    stem = events_path.stem
+    if not stem:
+        return None
+
+    candidates = [stem]
+    digits_only = "".join(ch for ch in stem if ch.isdigit())
+    if digits_only and digits_only != stem:
+        candidates.append(digits_only)
+
+    for candidate in candidates:
+        try:
+            return int(candidate)
+        except ValueError:
+            continue
+
+    digest = hashlib.sha1(stem.encode("utf-8")).digest()
+    hashed = int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
+    return hashed
 
 
 def _initialise_schema(connection: sqlite3.Connection) -> None:
@@ -256,15 +285,18 @@ def _insert_shots_and_freeze_frames(
             for entity in freeze_frame_entries:
                 if not isinstance(entity, Mapping):
                     continue
+                position_name = _get_nested_str(entity, ("position", "name"))
+                keeper_flag = 1 if (entity.get("keeper") is True or position_name == "Goalkeeper") else 0
+                teammate_flag = 1 if entity.get("teammate") else 0
                 location_xy = _extract_location(entity.get("location"))
                 freeze_frames.append(
                     (
                         shot_id,
                         _get_nested_int(entity, ("player", "id")),
                         _get_nested_str(entity, ("player", "name")),
-                        _get_nested_str(entity, ("position", "name")),
-                        _bool_to_int(entity.get("teammate")),
-                        _bool_to_int(entity.get("keeper")),
+                        position_name,
+                        teammate_flag,
+                        keeper_flag,
                         location_xy[0],
                         location_xy[1],
                     )
