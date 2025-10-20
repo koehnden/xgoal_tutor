@@ -5,7 +5,7 @@ import hashlib
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
 
 MutableEvent = MutableMapping[str, Any]
 
@@ -175,17 +175,21 @@ def _initialise_schema(connection: sqlite3.Connection) -> None:
 
 
 def _insert_events(connection: sqlite3.Connection, events: Sequence[MutableEvent]) -> None:
+    teams_by_match = _build_teams_by_match(events)
     event_rows = []
     for event in events:
         event_id = str(event.get("id"))
         if not event_id:
             continue
+        match_id = _get_int(event.get("match_id"))
+        team_id = _get_nested_int(event, ("team", "id"))
+        opponent_team_id = _infer_opponent_team_id(teams_by_match, match_id, team_id)
         row = (
             event_id,
-            _get_int(event.get("match_id")),
-            _get_nested_int(event, ("team", "id")),
+            match_id,
+            team_id,
             _get_nested_int(event, ("player", "id")),
-            _get_nested_int(event, ("opponent", "id")),
+            opponent_team_id,
             _get_int(event.get("possession")),
             _get_int(event.get("period")),
             _get_int(event.get("minute")),
@@ -218,6 +222,7 @@ def _insert_shots_and_freeze_frames(
     shots = []
     freeze_frames: List[Tuple[str, Optional[int], Optional[str], Optional[str], int, int, Optional[float], Optional[float]]] = []
     events_by_id = {str(event.get("id")): event for event in events if event.get("id")}
+    teams_by_match = _build_teams_by_match(events)
 
     for event in events:
         if _get_nested_str(event, ("type", "name")) != "Shot":
@@ -228,6 +233,9 @@ def _insert_shots_and_freeze_frames(
             continue
 
         shot_id = str(event.get("id"))
+        match_id = _get_int(event.get("match_id"))
+        team_id = _get_nested_int(event, ("team", "id"))
+        opponent_team_id = _infer_opponent_team_id(teams_by_match, match_id, team_id)
         location = _extract_location(event.get("location"))
         end_location = _extract_end_location(shot.get("end_location"))
         shot_type = _get_nested_str(shot, ("type", "name"))
@@ -237,9 +245,9 @@ def _insert_shots_and_freeze_frames(
         shots.append(
             (
                 shot_id,
-                _get_int(event.get("match_id")),
-                _get_nested_int(event, ("team", "id")),
-                _get_nested_int(event, ("opponent", "id")),
+                match_id,
+                team_id,
+                opponent_team_id,
                 _get_nested_int(event, ("player", "id")),
                 _get_int(event.get("possession")),
                 _get_nested_int(event, ("possession_team", "id")),
@@ -329,6 +337,45 @@ def _insert_shots_and_freeze_frames(
         """,
         freeze_frames,
     )
+
+
+def _build_teams_by_match(events: Sequence[MutableEvent]) -> Dict[int, Set[int]]:
+    teams_by_match: Dict[int, Set[int]] = {}
+    for event in events:
+        match_id = _get_int(event.get("match_id"))
+        if match_id is None:
+            continue
+
+        teams = teams_by_match.setdefault(match_id, set())
+
+        team_id = _get_nested_int(event, ("team", "id"))
+        if team_id is not None:
+            teams.add(team_id)
+
+        possession_team_id = _get_nested_int(event, ("possession_team", "id"))
+        if possession_team_id is not None:
+            teams.add(possession_team_id)
+
+    return teams_by_match
+
+
+def _infer_opponent_team_id(
+    teams_by_match: Mapping[int, Set[int]],
+    match_id: Optional[int],
+    team_id: Optional[int],
+) -> Optional[int]:
+    if match_id is None or team_id is None:
+        return None
+
+    teams = teams_by_match.get(match_id)
+    if not teams or team_id not in teams or len(teams) != 2:
+        return None
+
+    opponents = teams - {team_id}
+    if len(opponents) != 1:
+        return None
+
+    return next(iter(opponents))
 
 
 def _derive_assist_type(
