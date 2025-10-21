@@ -7,9 +7,10 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
+import pandas as pd
 from matplotlib import pyplot as plt
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.impute import SimpleImputer
@@ -76,6 +77,23 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Optional path to save a ROC curve plot for the selected probabilities.",
     )
+    parser.add_argument(
+        "--load-data-from-csv",
+        action="store_true",
+        help="Load precomputed train/test feature CSVs instead of rebuilding from the raw database.",
+    )
+    parser.add_argument(
+        "--train-csv",
+        type=Path,
+        default=Path("data/processed/train.csv"),
+        help="Path to the precomputed training features CSV (used with --load-data-from-csv).",
+    )
+    parser.add_argument(
+        "--test-csv",
+        type=Path,
+        default=Path("data/processed/test.csv"),
+        help="Path to the precomputed test features CSV (used with --load-data-from-csv).",
+    )
     return parser.parse_args()
 
 
@@ -94,23 +112,63 @@ def ensure_parent_dir(path: Optional[Path]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+def load_splits_from_csv(
+    train_path: Path, test_path: Path
+) -> Optional[Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]]:
+    """Load precomputed train/test splits from CSV files."""
 
-    args = parse_args()
+    if not train_path.exists():
+        logger.error("Training CSV not found at %s", train_path)
+        return None
+    if not test_path.exists():
+        logger.error("Test CSV not found at %s", test_path)
+        return None
 
-    np.random.seed(args.seed)
+    train_df = pd.read_csv(train_path)
+    test_df = pd.read_csv(test_path)
 
-    db_path = args.db_path
-    df = load_wide_df(db_path, use_materialized=args.use_materialized)
+    if "target" not in train_df.columns:
+        logger.error("Training CSV %s is missing the 'target' column", train_path)
+        return None
+    if "target" not in test_df.columns:
+        logger.error("Test CSV %s is missing the 'target' column", test_path)
+        return None
+
+    metadata_cols = [col for col in ["shot_id", "match_id", "target"] if col in train_df.columns]
+    train_y = train_df["target"].astype(int)
+    train_X = train_df.drop(columns=metadata_cols, errors="ignore").apply(
+        pd.to_numeric, errors="coerce"
+    )
+
+    metadata_cols_test = [col for col in ["shot_id", "match_id", "target"] if col in test_df.columns]
+    test_y = test_df["target"].astype(int)
+    test_X = test_df.drop(columns=metadata_cols_test, errors="ignore").apply(
+        pd.to_numeric, errors="coerce"
+    )
+
+    test_X = test_X.reindex(columns=train_X.columns, fill_value=np.nan)
+
+    return train_X, test_X, train_y, test_y
+
+
+def build_splits_from_raw(
+    db_path: Path,
+    *,
+    use_materialized: bool,
+    train_fraction: float,
+    seed: int,
+) -> Optional[Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]]:
+    """Load raw data, engineer features, and perform the grouped split."""
+
+    df = load_wide_df(db_path, use_materialized=use_materialized)
     if df is None or df.empty:
         logger.error("No data available at %s.", db_path)
-        return 1
+        return None
 
     data, y = prepare_shot_dataframe(df)
     if len(data) == 0:
         logger.error("No shots remain after filtering.")
-        return 1
+        return None
 
     X = build_feature_matrix(data)
     groups = data["match_id"] if "match_id" in data.columns else None
@@ -118,12 +176,44 @@ def main() -> int:
         X,
         y,
         groups,
-        train_fraction=args.train_fraction,
-        seed=args.seed,
+        train_fraction=train_fraction,
+        seed=seed,
     )
 
-    X_tr, X_te = X.iloc[train_idx], X.iloc[test_idx]
-    y_tr, y_te = y.iloc[train_idx], y.iloc[test_idx]
+    X_tr = X.iloc[train_idx]
+    X_te = X.iloc[test_idx]
+    y_tr = y.iloc[train_idx]
+    y_te = y.iloc[test_idx]
+
+    return X_tr, X_te, y_tr, y_te
+
+
+def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+
+    args = parse_args()
+
+    np.random.seed(args.seed)
+
+    if args.load_data_from_csv:
+        splits = load_splits_from_csv(args.train_csv, args.test_csv)
+        if splits is None:
+            return 1
+        X_tr, X_te, y_tr, y_te = splits
+        logger.info(
+            "Loaded precomputed features from %s and %s", args.train_csv, args.test_csv
+        )
+    else:
+        splits = build_splits_from_raw(
+            args.db_path,
+            use_materialized=args.use_materialized,
+            train_fraction=args.train_fraction,
+            seed=args.seed,
+        )
+        if splits is None:
+            return 1
+        X_tr, X_te, y_tr, y_te = splits
+        logger.info("Constructed features from raw data at %s", args.db_path)
 
     test_pos = float(y_te.mean()) if len(y_te) else float("nan")
     logger.info(
