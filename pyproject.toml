@@ -11,6 +11,7 @@ python = "^3.11"
 tqdm = "^4.67.1"
 lightgbm = "^4.3.0"
 shap = "^0.46.0"
+numpy = "<2.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2"

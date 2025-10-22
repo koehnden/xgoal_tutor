@@ -97,7 +97,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--n-estimators",
         type=int,
-        default=500,
+        default=2000,
         help="Number of boosting rounds for LightGBM.",
     )
     parser.add_argument(
@@ -121,7 +121,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--lambda-l2",
         type=float,
-        default=1.0,
+        default=2.0,
         help="L2 regularization strength (lambda_l2) applied to the LightGBM model.",
     )
     parser.add_argument(
@@ -258,7 +258,7 @@ def build_model(
         random_state=args.seed,
         objective="binary",
         n_jobs=-1,
-        is_unbalanced=True,
+        is_unbalance=True,
         lambda_l2=args.lambda_l2,
     )
 
