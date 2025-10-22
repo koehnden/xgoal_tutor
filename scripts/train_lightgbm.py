@@ -35,6 +35,12 @@ DEFAULT_METRICS_PATH = (SCRIPT_DIR / "../results/lightgbm_metrics.json").resolve
 DEFAULT_IMPORTANCE_PATH = (SCRIPT_DIR / "../results/lightgbm_feature_importances.json").resolve()
 DEFAULT_SHAP_PATH = (SCRIPT_DIR / "../results/lightgbm_shap_values.json").resolve()
 
+TUNING_LEARNING_RATES: tuple[float, ...] = (0.02, 0.05, 0.1)
+TUNING_NUM_LEAVES_FACTORS: tuple[float, ...] = (0.5, 1.0, 2.0)
+TUNING_MIN_DATA_IN_LEAF_FACTORS: tuple[float, ...] = (0.5, 1.0, 2.0)
+TUNING_MIN_TREE_PARAMETER_VALUE = 2
+TUNING_EARLY_STOPPING_ROUNDS = 100
+
 
 @dataclass
 class DatasetSplits:
@@ -97,8 +103,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--n-estimators",
         type=int,
-        default=2000,
-        help="Number of boosting rounds for LightGBM.",
+        default=5000,
+        help="Number of boosting rounds for LightGBM (upper bound when using early stopping).",
     )
     parser.add_argument(
         "--learning-rate",
@@ -245,10 +251,11 @@ def build_model(
     *,
     num_leaves: Optional[int] = None,
     min_data_in_leaf: Optional[int] = None,
+    learning_rate: Optional[float] = None,
 ) -> lgb.LGBMClassifier:
     return lgb.LGBMClassifier(
         n_estimators=args.n_estimators,
-        learning_rate=args.learning_rate,
+        learning_rate=learning_rate if learning_rate is not None else args.learning_rate,
         num_leaves=num_leaves if num_leaves is not None else args.num_leaves,
         min_data_in_leaf=(
             min_data_in_leaf if min_data_in_leaf is not None else args.min_data_in_leaf
@@ -279,19 +286,42 @@ def _binary_log_loss(y_true: pd.Series, proba: np.ndarray) -> float:
     return float(-np.mean(y_array * np.log(clipped) + (1 - y_array) * np.log(1 - clipped)))
 
 
-def _construct_tuning_grid(center: int, *, lower_factor: float, upper_factor: float) -> list[int]:
-    candidates = {
-        max(2, int(round(center * lower_factor))),
-        max(2, int(round(center))),
-        max(2, int(round(center * upper_factor))),
-    }
+def _construct_tuning_grid(
+    center: int,
+    *,
+    factors: tuple[float, ...],
+    min_value: int,
+) -> list[int]:
+    candidates = {max(min_value, int(round(center * factor))) for factor in factors}
     return sorted(candidates)
 
 
-def _make_parameter_grid(num_leaves_center: int, min_data_center: int) -> list[tuple[int, int]]:
-    leaves_grid = _construct_tuning_grid(num_leaves_center, lower_factor=0.5, upper_factor=2.0)
-    min_data_grid = _construct_tuning_grid(min_data_center, lower_factor=0.5, upper_factor=2.0)
-    return [(num_leaves, min_data) for num_leaves, min_data in product(leaves_grid, min_data_grid)]
+def _make_parameter_grid(
+    num_leaves_center: int, min_data_center: int, learning_rates: tuple[float, ...]
+) -> list[dict[str, float | int]]:
+    leaves_grid = _construct_tuning_grid(
+        num_leaves_center,
+        factors=TUNING_NUM_LEAVES_FACTORS,
+        min_value=TUNING_MIN_TREE_PARAMETER_VALUE,
+    )
+    min_data_grid = _construct_tuning_grid(
+        min_data_center,
+        factors=TUNING_MIN_DATA_IN_LEAF_FACTORS,
+        min_value=TUNING_MIN_TREE_PARAMETER_VALUE,
+    )
+
+    parameter_grid: list[dict[str, float | int]] = []
+    for num_leaves, min_data, learning_rate in product(
+        leaves_grid, min_data_grid, learning_rates
+    ):
+        parameter_grid.append(
+            {
+                "num_leaves": num_leaves,
+                "min_data_in_leaf": min_data,
+                "learning_rate": float(learning_rate),
+            }
+        )
+    return parameter_grid
 
 
 def _build_group_folds(groups: pd.Series, n_splits: int, seed: int) -> list[tuple[np.ndarray, np.ndarray]]:
@@ -329,23 +359,32 @@ def tune_hyperparameters(
     y: pd.Series,
     match_ids: pd.Series,
     args: argparse.Namespace,
-) -> dict[str, int]:
-    parameter_grid = _make_parameter_grid(args.num_leaves, args.min_data_in_leaf)
+) -> dict[str, float | int]:
+    parameter_grid = _make_parameter_grid(
+        args.num_leaves, args.min_data_in_leaf, TUNING_LEARNING_RATES
+    )
     logger.info(
-        "Tuning LightGBM over %d combinations for num_leaves=%s and min_data_in_leaf=%s",
+        (
+            "Tuning LightGBM over %d combinations for num_leaves=%s, "
+            "min_data_in_leaf=%s, learning_rate=%s"
+        ),
         len(parameter_grid),
-        sorted({combo[0] for combo in parameter_grid}),
-        sorted({combo[1] for combo in parameter_grid}),
+        sorted({int(combo["num_leaves"]) for combo in parameter_grid}),
+        sorted({int(combo["min_data_in_leaf"]) for combo in parameter_grid}),
+        sorted({combo["learning_rate"] for combo in parameter_grid}),
     )
 
     folds = _build_group_folds(match_ids.reset_index(drop=True), n_splits=5, seed=args.seed)
 
-    best_params: dict[str, int] | None = None
+    best_params: dict[str, float | int] | None = None
     best_score = float("inf")
     best_auc = float("nan")
     results_summary: list[dict[str, float]] = []
 
-    for num_leaves, min_data in tqdm(parameter_grid, desc="Tuning LightGBM", unit="combo"):
+    for combo in tqdm(parameter_grid, desc="Tuning LightGBM", unit="combo"):
+        num_leaves = int(combo["num_leaves"])
+        min_data = int(combo["min_data_in_leaf"])
+        learning_rate = float(combo["learning_rate"])
         fold_loglosses: list[float] = []
         fold_aucs: list[float] = []
         fold_briers: list[float] = []
@@ -358,9 +397,13 @@ def tune_hyperparameters(
 
             if np.unique(y_tr).size < 2:
                 logger.debug(
-                    "Skipping fold during tuning because training data lacks class diversity (num_leaves=%d, min_data_in_leaf=%d).",
+                    (
+                        "Skipping fold during tuning because training data lacks class diversity "
+                        "(num_leaves=%d, min_data_in_leaf=%d, learning_rate=%.3f)."
+                    ),
                     num_leaves,
                     min_data,
+                    learning_rate,
                 )
                 continue
 
@@ -368,9 +411,23 @@ def tune_hyperparameters(
                 args,
                 num_leaves=num_leaves,
                 min_data_in_leaf=min_data,
+                learning_rate=learning_rate,
             )
-            candidate_model.fit(X_tr, y_tr)
-            val_proba = candidate_model.predict_proba(X_val)[:, 1]
+            candidate_model.fit(
+                X_tr,
+                y_tr,
+                eval_set=[(X_val, y_val)],
+                eval_metric="binary_logloss",
+                early_stopping_rounds=TUNING_EARLY_STOPPING_ROUNDS,
+                verbose=False,
+            )
+            best_iteration = getattr(candidate_model, "best_iteration_", None)
+            if best_iteration is not None:
+                val_proba = candidate_model.predict_proba(
+                    X_val, num_iteration=best_iteration
+                )[:, 1]
+            else:
+                val_proba = candidate_model.predict_proba(X_val)[:, 1]
 
             fold_loglosses.append(_binary_log_loss(y_val, val_proba))
             metrics = compute_binary_classification_metrics(y_val, val_proba)
@@ -379,9 +436,13 @@ def tune_hyperparameters(
 
         if not fold_loglosses:
             logger.warning(
-                "No valid folds evaluated for num_leaves=%d, min_data_in_leaf=%d; skipping combination.",
+                (
+                    "No valid folds evaluated for num_leaves=%d, min_data_in_leaf=%d, "
+                    "learning_rate=%.3f; skipping combination."
+                ),
                 num_leaves,
                 min_data,
+                learning_rate,
             )
             continue
 
@@ -393,6 +454,7 @@ def tune_hyperparameters(
             {
                 "num_leaves": float(num_leaves),
                 "min_data_in_leaf": float(min_data),
+                "learning_rate": learning_rate,
                 "mean_logloss": mean_logloss,
                 "mean_auc": mean_auc,
                 "mean_brier": mean_brier,
@@ -404,7 +466,11 @@ def tune_hyperparameters(
         ):
             best_score = mean_logloss
             best_auc = mean_auc
-            best_params = {"num_leaves": num_leaves, "min_data_in_leaf": min_data}
+            best_params = {
+                "num_leaves": num_leaves,
+                "min_data_in_leaf": min_data,
+                "learning_rate": learning_rate,
+            }
 
     if best_params is None:
         raise RuntimeError("Hyperparameter tuning failed to evaluate any parameter combinations.")
@@ -412,18 +478,26 @@ def tune_hyperparameters(
     top_results = sorted(results_summary, key=lambda row: row["mean_logloss"])[:3]
     for rank, result in enumerate(top_results, start=1):
         logger.info(
-            "Tuning rank %d: num_leaves=%d, min_data_in_leaf=%d, mean_logloss=%.5f, mean_auc=%s",
+            (
+                "Tuning rank %d: num_leaves=%d, min_data_in_leaf=%d, learning_rate=%.3f, "
+                "mean_logloss=%.5f, mean_auc=%s"
+            ),
             rank,
             int(result["num_leaves"]),
             int(result["min_data_in_leaf"]),
+            result["learning_rate"],
             result["mean_logloss"],
             "nan" if np.isnan(result["mean_auc"]) else f"{result['mean_auc']:.5f}",
         )
 
     logger.info(
-        "Selected best parameters: num_leaves=%d, min_data_in_leaf=%d (mean_logloss=%.5f, mean_auc=%s)",
+        (
+            "Selected best parameters: num_leaves=%d, min_data_in_leaf=%d, learning_rate=%.3f "
+            "(mean_logloss=%.5f, mean_auc=%s)"
+        ),
         best_params["num_leaves"],
         best_params["min_data_in_leaf"],
+        best_params["learning_rate"],
         best_score,
         "nan" if np.isnan(best_auc) else f"{best_auc:.5f}",
     )
@@ -566,6 +640,7 @@ def main() -> int:
         args,
         num_leaves=best_params["num_leaves"],
         min_data_in_leaf=best_params["min_data_in_leaf"],
+        learning_rate=float(best_params["learning_rate"]),
     )
     model.fit(X_tr, y_tr)
     logger.info("Trained LightGBM model with %d features", X_tr.shape[1])
