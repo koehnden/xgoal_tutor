@@ -6,8 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -20,15 +21,32 @@ from sklearn.preprocessing import StandardScaler
 
 from xgoal_tutor.modeling import (
     build_feature_matrix,
-    compute_binary_classification_metrics,
     grouped_train_test_split,
     load_wide_df,
     plot_roc_curve,
     prepare_shot_dataframe,
 )
+from xgoal_tutor.modeling.evaluation import compute_binary_classification_metrics
 
 
 logger = logging.getLogger(__name__)
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_DATABASE_PATH = (SCRIPT_DIR / "../data/xgoal-db.sqlite").resolve()
+DEFAULT_TRAIN_CSV = (SCRIPT_DIR / "../data/processed/train.csv").resolve()
+DEFAULT_TEST_CSV = (SCRIPT_DIR / "../data/processed/test.csv").resolve()
+
+
+@dataclass
+class DatasetSplits:
+    """Container for feature matrices, targets and optional metadata."""
+
+    X_train: pd.DataFrame
+    X_test: pd.DataFrame
+    y_train: pd.Series
+    y_test: pd.Series
+    train_metadata: Optional[pd.DataFrame]
+    test_metadata: Optional[pd.DataFrame]
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,7 +56,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--database-path",
         type=Path,
-        default=Path("data/xgoal-db.sqlite"),
+        default=DEFAULT_DATABASE_PATH,
         help="Path to the StatsBomb SQLite database export.",
     )
     parser.add_argument(
@@ -85,13 +103,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--train-csv",
         type=Path,
-        default=Path("data/processed/train.csv"),
+        default=DEFAULT_TRAIN_CSV,
         help="Path to the precomputed training features CSV (used with --load-data-from-csv).",
     )
     parser.add_argument(
         "--test-csv",
         type=Path,
-        default=Path("data/processed/test.csv"),
+        default=DEFAULT_TEST_CSV,
         help="Path to the precomputed test features CSV (used with --load-data-from-csv).",
     )
     return parser.parse_args()
@@ -112,9 +130,11 @@ def ensure_parent_dir(path: Optional[Path]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def load_splits_from_csv(
-    train_path: Path, test_path: Path
-) -> Optional[Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]]:
+def _metadata_columns(frame: pd.DataFrame) -> list[str]:
+    return [col for col in ["shot_id", "match_id"] if col in frame.columns]
+
+
+def load_splits_from_csv(train_path: Path, test_path: Path) -> Optional[DatasetSplits]:
     """Load precomputed train/test splits from CSV files."""
 
     if not train_path.exists():
@@ -134,21 +154,21 @@ def load_splits_from_csv(
         logger.error("Test CSV %s is missing the 'target' column", test_path)
         return None
 
-    metadata_cols = [col for col in ["shot_id", "match_id", "target"] if col in train_df.columns]
-    train_y = train_df["target"].astype(int)
-    train_X = train_df.drop(columns=metadata_cols, errors="ignore").apply(
-        pd.to_numeric, errors="coerce"
-    )
+    metadata_cols = _metadata_columns(train_df)
+    train_metadata = train_df[metadata_cols].reset_index(drop=True) if metadata_cols else None
+    test_metadata = test_df[metadata_cols].reset_index(drop=True) if metadata_cols else None
 
-    metadata_cols_test = [col for col in ["shot_id", "match_id", "target"] if col in test_df.columns]
-    test_y = test_df["target"].astype(int)
-    test_X = test_df.drop(columns=metadata_cols_test, errors="ignore").apply(
-        pd.to_numeric, errors="coerce"
-    )
+    drop_cols = metadata_cols + ["target"]
+    X_train = train_df.drop(columns=drop_cols, errors="ignore").apply(pd.to_numeric, errors="coerce")
+    X_test = test_df.drop(columns=drop_cols, errors="ignore").apply(pd.to_numeric, errors="coerce")
 
-    test_X = test_X.reindex(columns=train_X.columns, fill_value=np.nan)
+    X_train = X_train.reset_index(drop=True)
+    X_test = X_test.reindex(columns=X_train.columns, fill_value=np.nan).reset_index(drop=True)
 
-    return train_X, test_X, train_y, test_y
+    y_train = train_df["target"].astype(int).reset_index(drop=True)
+    y_test = test_df["target"].astype(int).reset_index(drop=True)
+
+    return DatasetSplits(X_train, X_test, y_train, y_test, train_metadata, test_metadata)
 
 
 def build_splits_from_raw(
@@ -157,7 +177,7 @@ def build_splits_from_raw(
     use_materialized: bool,
     train_fraction: float,
     seed: int,
-) -> Optional[Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]]:
+) -> Optional[DatasetSplits]:
     """Load raw data, engineer features, and perform the grouped split."""
 
     df = load_wide_df(db_path, use_materialized=use_materialized)
@@ -170,22 +190,39 @@ def build_splits_from_raw(
         logger.error("No shots remain after filtering.")
         return None
 
-    X = build_feature_matrix(data)
+    feature_matrix = build_feature_matrix(data)
     groups = data["match_id"] if "match_id" in data.columns else None
     train_idx, test_idx = grouped_train_test_split(
-        X,
+        feature_matrix,
         y,
         groups,
         train_fraction=train_fraction,
         seed=seed,
     )
 
-    X_tr = X.iloc[train_idx]
-    X_te = X.iloc[test_idx]
-    y_tr = y.iloc[train_idx]
-    y_te = y.iloc[test_idx]
+    X_train = feature_matrix.iloc[train_idx].reset_index(drop=True)
+    y_train = y.iloc[train_idx].reset_index(drop=True)
 
-    return X_tr, X_te, y_tr, y_te
+    if len(test_idx) > 0:
+        X_test = feature_matrix.iloc[test_idx].reset_index(drop=True)
+        y_test = y.iloc[test_idx].reset_index(drop=True)
+    else:
+        X_test = pd.DataFrame(columns=feature_matrix.columns)
+        y_test = pd.Series(dtype=y.dtype, name=y.name)
+
+    metadata_cols = _metadata_columns(data)
+    train_metadata = (
+        data.iloc[train_idx][metadata_cols].reset_index(drop=True)
+        if metadata_cols
+        else None
+    )
+    test_metadata = (
+        data.iloc[test_idx][metadata_cols].reset_index(drop=True)
+        if metadata_cols and len(test_idx) > 0
+        else (pd.DataFrame(columns=metadata_cols) if metadata_cols else None)
+    )
+
+    return DatasetSplits(X_train, X_test, y_train, y_test, train_metadata, test_metadata)
 
 
 def main() -> int:
@@ -199,7 +236,6 @@ def main() -> int:
         splits = load_splits_from_csv(args.train_csv, args.test_csv)
         if splits is None:
             return 1
-        X_tr, X_te, y_tr, y_te = splits
         logger.info(
             "Loaded precomputed features from %s and %s", args.train_csv, args.test_csv
         )
@@ -212,50 +248,60 @@ def main() -> int:
         )
         if splits is None:
             return 1
-        X_tr, X_te, y_tr, y_te = splits
         logger.info("Constructed features from raw data at %s", args.database_path)
 
-    test_pos = float(y_te.mean()) if len(y_te) else float("nan")
-    logger.info(
-        "train=%d (pos=%.3f), test=%d (pos=%.3f)",
-        len(X_tr),
-        float(y_tr.mean()),
-        len(X_te),
-        test_pos,
+    X_train, X_test, y_train, y_test = (
+        splits.X_train,
+        splits.X_test,
+        splits.y_train,
+        splits.y_test,
     )
 
-    if len(X_tr) == 0 or np.unique(y_tr).size < 2:
+    logger.info("Training samples: %d (pos=%.3f)", len(X_train), float(y_train.mean()))
+    logger.info(
+        "Test samples: %d (pos=%.3f)",
+        len(X_test),
+        float(y_test.mean()) if len(y_test) else float("nan"),
+    )
+
+    if len(X_train) == 0 or np.unique(y_train).size < 2:
         logger.error("Not enough training data to fit the model.")
         return 1
 
-    base_model = build_model(args.seed)
-    base_model.fit(X_tr, y_tr)
+    model = build_model(args.seed)
+    model.fit(X_train, y_train)
 
-    metrics: Dict[str, Dict[str, float]] = {}
+    metrics: dict[str, dict[str, float]] = {}
 
-    if len(X_te) > 0:
-        proba_raw = base_model.predict_proba(X_te)[:, 1]
-        metrics["uncalibrated"] = compute_binary_classification_metrics(y_te, proba_raw)
+    if len(X_test) > 0:
+        test_proba = model.predict_proba(X_test)[:, 1]
+        metrics["uncalibrated"] = compute_binary_classification_metrics(y_test, test_proba)
     else:
-        proba_raw = np.array([])
-        metrics["uncalibrated"] = {"auc": float("nan"), "logloss": float("nan"), "brier": float("nan")}
+        test_proba = np.array([])
+        metrics["uncalibrated"] = {
+            "auc": float("nan"),
+            "logloss": float("nan"),
+            "brier": float("nan"),
+        }
 
-    selected_proba = proba_raw
+    selected_proba = test_proba
 
     if args.calibrate:
-        calibrator = CalibratedClassifierCV(base_model, method="sigmoid", cv="prefit")
-        calibrator.fit(X_tr, y_tr)
-        if len(X_te) > 0:
-            proba_cal = calibrator.predict_proba(X_te)[:, 1]
-            metrics["calibrated"] = compute_binary_classification_metrics(y_te, proba_cal)
-            selected_proba = proba_cal
+        calibrator = CalibratedClassifierCV(model, method="sigmoid", cv="prefit")
+        calibrator.fit(X_train, y_train)
+        if len(X_test) > 0:
+            calibrated_proba = calibrator.predict_proba(X_test)[:, 1]
+            metrics["calibrated"] = compute_binary_classification_metrics(
+                y_test, calibrated_proba
+            )
+            selected_proba = calibrated_proba
         else:
             metrics["calibrated"] = {
                 "auc": float("nan"),
                 "logloss": float("nan"),
                 "brier": float("nan"),
             }
-            selected_proba = proba_cal = np.array([])
+            selected_proba = calibrated_proba = np.array([])
 
     metrics_text = json.dumps(metrics, indent=2, sort_keys=True)
     logger.info("Evaluation metrics:\n%s", metrics_text)
@@ -266,8 +312,8 @@ def main() -> int:
             json.dump(metrics, fp, indent=2, sort_keys=True)
         logger.info("Saved metrics to %s", args.metrics_path)
 
-    if args.roc_path is not None and len(selected_proba) > 0 and len(np.unique(y_te)) >= 2:
-        ax = plot_roc_curve(y_te, selected_proba)
+    if args.roc_path is not None and len(selected_proba) > 0 and len(np.unique(y_test)) >= 2:
+        ax = plot_roc_curve(y_test, selected_proba)
         ensure_parent_dir(args.roc_path)
         ax.figure.savefig(args.roc_path, bbox_inches="tight")
         plt.close(ax.figure)
