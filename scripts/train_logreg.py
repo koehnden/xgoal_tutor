@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
         description="Train the baseline logistic regression xG model using StatsBomb data."
     )
     parser.add_argument(
-        "--db-path",
+        "--database-path",
         type=Path,
         default=Path("data/xgoal-db.sqlite"),
         help="Path to the StatsBomb SQLite database export.",
@@ -205,7 +205,7 @@ def main() -> int:
         )
     else:
         splits = build_splits_from_raw(
-            args.db_path,
+            args.database_path,
             use_materialized=args.use_materialized,
             train_fraction=args.train_fraction,
             seed=args.seed,
@@ -213,7 +213,7 @@ def main() -> int:
         if splits is None:
             return 1
         X_tr, X_te, y_tr, y_te = splits
-        logger.info("Constructed features from raw data at %s", args.db_path)
+        logger.info("Constructed features from raw data at %s", args.database_path)
 
     test_pos = float(y_te.mean()) if len(y_te) else float("nan")
     logger.info(

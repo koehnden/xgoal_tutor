@@ -27,9 +27,9 @@ def parse_args() -> argparse.Namespace:
         description="Prepare train/test feature CSVs for the baseline xGoal dataset.",
     )
     parser.add_argument(
-        "--db-path",
+        "--database-path",
         type=Path,
-        default=Path("data/xgoal-db.sqlite"),
+        default=Path("../data/xgoal-db.sqlite"),
         help="Path to the StatsBomb SQLite database export.",
     )
     parser.add_argument(
@@ -54,7 +54,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("data/processed"),
+        default=Path("../data/processed"),
         help="Directory where train.csv and test.csv will be written.",
     )
     return parser.parse_args()
@@ -88,9 +88,9 @@ def main() -> int:
 
     np.random.seed(args.seed)
 
-    df = load_wide_df(args.db_path, use_materialized=args.use_materialized)
+    df = load_wide_df(args.database_path, use_materialized=args.use_materialized)
     if df is None or df.empty:
-        logger.error("No data available at %s.", args.db_path)
+        logger.error("No data available at %s.", args.database_path)
         return 1
 
     data, y = prepare_shot_dataframe(df)
