@@ -21,6 +21,10 @@ from xgoal_tutor.modeling import (
 
 logger = logging.getLogger(__name__)
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_DATABASE_PATH = (SCRIPT_DIR / "../data/xgoal-db.sqlite").resolve()
+DEFAULT_OUTPUT_DIR = (SCRIPT_DIR / "../data/processed").resolve()
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -29,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--database-path",
         type=Path,
-        default=Path("../data/xgoal-db.sqlite"),
+        default=DEFAULT_DATABASE_PATH,
         help="Path to the StatsBomb SQLite database export.",
     )
     parser.add_argument(
@@ -54,31 +58,35 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("../data/processed"),
+        default=DEFAULT_OUTPUT_DIR,
         help="Directory where train.csv and test.csv will be written.",
     )
     return parser.parse_args()
 
 
-def _attach_metadata(
-    features: pd.DataFrame,
+def _metadata_columns(frame: pd.DataFrame) -> list[str]:
+    return [col for col in ["shot_id", "match_id"] if col in frame.columns]
+
+
+def _build_split_frame(
+    feature_matrix: pd.DataFrame,
     source: pd.DataFrame,
     indices: Sequence[int],
     target: pd.Series,
 ) -> pd.DataFrame:
     """Combine feature matrix with metadata and target column."""
 
-    frame = features.iloc[indices].copy()
+    frame = feature_matrix.iloc[indices].reset_index(drop=True)
+    metadata_cols = _metadata_columns(source)
 
-    for column in ["shot_id", "match_id"]:
-        if column in source.columns:
-            frame.insert(0, column, source.iloc[indices][column].to_numpy())
+    for column in metadata_cols:
+        frame.insert(0, column, source.iloc[indices][column].to_numpy())
 
     frame["target"] = target.iloc[indices].to_numpy()
     return frame
 
 
-def ensure_dir(path: Path) -> None:
+def ensure_directory(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
@@ -88,44 +96,47 @@ def main() -> int:
 
     np.random.seed(args.seed)
 
-    df = load_wide_df(args.database_path, use_materialized=args.use_materialized)
-    if df is None or df.empty:
+    wide_df = load_wide_df(args.database_path, use_materialized=args.use_materialized)
+    if wide_df is None or wide_df.empty:
         logger.error("No data available at %s.", args.database_path)
         return 1
 
-    data, y = prepare_shot_dataframe(df)
-    if len(data) == 0:
+    shots_df, target = prepare_shot_dataframe(wide_df)
+    if len(shots_df) == 0:
         logger.error("No shots remain after filtering.")
         return 1
 
-    X = build_feature_matrix(data)
-    groups = data["match_id"] if "match_id" in data.columns else None
-    train_idx, test_idx = grouped_train_test_split(
-        X,
-        y,
+    feature_matrix = build_feature_matrix(shots_df)
+    groups = shots_df["match_id"] if "match_id" in shots_df.columns else None
+    train_indices, test_indices = grouped_train_test_split(
+        feature_matrix,
+        target,
         groups,
         train_fraction=args.train_fraction,
         seed=args.seed,
     )
 
-    if len(train_idx) == 0:
+    if len(train_indices) == 0:
         logger.error("Training split is empty; aborting feature export.")
         return 1
 
-    train_frame = _attach_metadata(X, data, train_idx, y)
-    test_frame = _attach_metadata(X, data, test_idx, y) if len(test_idx) else pd.DataFrame(columns=train_frame.columns)
+    train_df = _build_split_frame(feature_matrix, shots_df, train_indices, target)
+    if len(test_indices):
+        test_df = _build_split_frame(feature_matrix, shots_df, test_indices, target)
+    else:
+        test_df = pd.DataFrame(columns=train_df.columns)
 
-    ensure_dir(args.output_dir)
+    ensure_directory(args.output_dir)
     train_path = args.output_dir / "train.csv"
     test_path = args.output_dir / "test.csv"
 
-    train_frame.to_csv(train_path, index=False)
-    test_frame.to_csv(test_path, index=False)
+    train_df.to_csv(train_path, index=False)
+    test_df.to_csv(test_path, index=False)
 
     logger.info(
         "Saved %d training rows and %d test rows to %s",
-        len(train_frame),
-        len(test_frame),
+        len(train_df),
+        len(test_df),
         args.output_dir,
     )
 
