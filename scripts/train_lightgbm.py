@@ -35,7 +35,7 @@ DEFAULT_METRICS_PATH = (SCRIPT_DIR / "../results/lightgbm_metrics.json").resolve
 DEFAULT_IMPORTANCE_PATH = (SCRIPT_DIR / "../results/lightgbm_feature_importances.json").resolve()
 DEFAULT_SHAP_PATH = (SCRIPT_DIR / "../results/lightgbm_shap_values.json").resolve()
 
-TUNING_LEARNING_RATES: tuple[float, ...] = (0.02, 0.05, 0.1)
+TUNING_LEARNING_RATES: tuple[float, ...] = (0.01, 0.02, 0.05)
 TUNING_NUM_LEAVES_FACTORS: tuple[float, ...] = (0.5, 1.0, 2.0)
 TUNING_MIN_DATA_IN_LEAF_FACTORS: tuple[float, ...] = (0.5, 1.0, 2.0)
 TUNING_MIN_TREE_PARAMETER_VALUE = 2
@@ -260,7 +260,7 @@ def build_model(
         min_data_in_leaf=(
             min_data_in_leaf if min_data_in_leaf is not None else args.min_data_in_leaf
         ),
-        subsample=0.9,
+        subsample=0.5,
         colsample_bytree=0.9,
         random_state=args.seed,
         objective="binary",
@@ -417,9 +417,7 @@ def tune_hyperparameters(
                 X_tr,
                 y_tr,
                 eval_set=[(X_val, y_val)],
-                eval_metric="binary_logloss",
-                early_stopping_rounds=TUNING_EARLY_STOPPING_ROUNDS,
-                verbose=False,
+                eval_metric="binary_logloss"
             )
             best_iteration = getattr(candidate_model, "best_iteration_", None)
             if best_iteration is not None:
