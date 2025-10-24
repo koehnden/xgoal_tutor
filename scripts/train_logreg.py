@@ -35,6 +35,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_DATABASE_PATH = (SCRIPT_DIR / "../data/xgoal-db.sqlite").resolve()
 DEFAULT_TRAIN_CSV = (SCRIPT_DIR / "../data/processed/train.csv").resolve()
 DEFAULT_TEST_CSV = (SCRIPT_DIR / "../data/processed/test.csv").resolve()
+DEFAULT_METRICS_PATH = (SCRIPT_DIR / "../results/logreg_metrics.json").resolve()
+DEFAULT_COEFFICIENTS_PATH = (SCRIPT_DIR / "../results/logreg_coefficients.json").resolve()
 
 
 @dataclass
@@ -88,7 +90,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--metrics-path",
         type=Path,
-        help="Optional path to save evaluation metrics as JSON.",
+        default=DEFAULT_METRICS_PATH,
+        help=(
+            "Path to save evaluation metrics as JSON (default: results/logreg_metrics.json)."
+        ),
+    )
+    parser.add_argument(
+        "--coefficients-path",
+        type=Path,
+        default=DEFAULT_COEFFICIENTS_PATH,
+        help=(
+            "Path to save model coefficients as JSON "
+            "(default: results/logreg_coefficients.json)."
+        ),
     )
     parser.add_argument(
         "--roc-path",
@@ -271,37 +285,46 @@ def main() -> int:
     model = build_model(args.seed)
     model.fit(X_train, y_train)
 
-    metrics: dict[str, dict[str, float]] = {}
-
+    train_proba = model.predict_proba(X_train)[:, 1]
     if len(X_test) > 0:
         test_proba = model.predict_proba(X_test)[:, 1]
-        metrics["uncalibrated"] = compute_binary_classification_metrics(y_test, test_proba)
+        test_metrics_uncalibrated = compute_binary_classification_metrics(y_test, test_proba)
     else:
         test_proba = np.array([])
-        metrics["uncalibrated"] = {
+        test_metrics_uncalibrated = {
             "auc": float("nan"),
             "logloss": float("nan"),
             "brier": float("nan"),
         }
 
-    selected_proba = test_proba
+    metrics_uncalibrated = {
+        "train": compute_binary_classification_metrics(y_train, train_proba),
+        "test": test_metrics_uncalibrated,
+    }
+    logger.info(
+        "Uncalibrated evaluation metrics:\n%s",
+        json.dumps(metrics_uncalibrated, indent=2, sort_keys=True),
+    )
+
+    selected_train_proba = train_proba
+    selected_test_proba = test_proba
+
+    metrics = metrics_uncalibrated
 
     if args.calibrate:
         calibrator = CalibratedClassifierCV(model, method="sigmoid", cv="prefit")
         calibrator.fit(X_train, y_train)
+        selected_train_proba = calibrator.predict_proba(X_train)[:, 1]
         if len(X_test) > 0:
-            calibrated_proba = calibrator.predict_proba(X_test)[:, 1]
-            metrics["calibrated"] = compute_binary_classification_metrics(
-                y_test, calibrated_proba
-            )
-            selected_proba = calibrated_proba
-        else:
-            metrics["calibrated"] = {
-                "auc": float("nan"),
-                "logloss": float("nan"),
-                "brier": float("nan"),
-            }
-            selected_proba = calibrated_proba = np.array([])
+            selected_test_proba = calibrator.predict_proba(X_test)[:, 1]
+        metrics = {
+            "train": compute_binary_classification_metrics(y_train, selected_train_proba),
+            "test": compute_binary_classification_metrics(y_test, selected_test_proba),
+        }
+        logger.info(
+            "Calibrated evaluation metrics:\n%s",
+            json.dumps(metrics, indent=2, sort_keys=True),
+        )
 
     metrics_text = json.dumps(metrics, indent=2, sort_keys=True)
     logger.info("Evaluation metrics:\n%s", metrics_text)
@@ -312,8 +335,34 @@ def main() -> int:
             json.dump(metrics, fp, indent=2, sort_keys=True)
         logger.info("Saved metrics to %s", args.metrics_path)
 
-    if args.roc_path is not None and len(selected_proba) > 0 and len(np.unique(y_test)) >= 2:
-        ax = plot_roc_curve(y_test, selected_proba)
+    logistic_model = model.named_steps.get("logisticregression")
+    if logistic_model is not None:
+        coefficients = [
+            {"feature": feature, "coefficient": float(coef)}
+            for feature, coef in zip(X_train.columns, logistic_model.coef_.ravel())
+        ]
+        if hasattr(logistic_model, "intercept_"):
+            intercept_values = np.atleast_1d(logistic_model.intercept_)
+            for idx, intercept_value in enumerate(intercept_values):
+                feature_name = "__intercept__" if intercept_values.size == 1 else f"__intercept__{idx}"
+                coefficients.append(
+                    {
+                        "feature": feature_name,
+                        "coefficient": float(intercept_value),
+                    }
+                )
+        if args.coefficients_path is not None:
+            ensure_parent_dir(args.coefficients_path)
+            with args.coefficients_path.open("w", encoding="utf-8") as fp:
+                json.dump(coefficients, fp, indent=2)
+            logger.info("Saved coefficients to %s", args.coefficients_path)
+
+    if (
+        args.roc_path is not None
+        and len(selected_test_proba) > 0
+        and len(np.unique(y_test)) >= 2
+    ):
+        ax = plot_roc_curve(y_test, selected_test_proba)
         ensure_parent_dir(args.roc_path)
         ax.figure.savefig(args.roc_path, bbox_inches="tight")
         plt.close(ax.figure)
