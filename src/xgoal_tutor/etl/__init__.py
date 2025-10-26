@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 
-from . import statsbomb as _statsbomb
+from xgoal_tutor.etl import statsbomb as _statsbomb
 
 load_match_events = _statsbomb.load_match_events
 
