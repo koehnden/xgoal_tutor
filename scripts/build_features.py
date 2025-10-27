@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Generate train/test feature CSVs for xGoal modeling experiments."""
+
+from __future__ import annotations
+
+import argparse
+import logging
+from pathlib import Path
+from typing import Sequence
+
+import numpy as np
+import pandas as pd
+
+from xgoal_tutor.modeling import (
+    build_feature_matrix,
+    grouped_train_test_split,
+    load_wide_df,
+    prepare_shot_dataframe,
+)
+
+
+logger = logging.getLogger(__name__)
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_DATABASE_PATH = (SCRIPT_DIR / "../data/xgoal-db.sqlite").resolve()
+DEFAULT_OUTPUT_DIR = (SCRIPT_DIR / "../data/processed").resolve()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Prepare train/test feature CSVs for the baseline xGoal dataset.",
+    )
+    parser.add_argument(
+        "--database-path",
+        type=Path,
+        default=DEFAULT_DATABASE_PATH,
+        help="Path to the StatsBomb SQLite database export.",
+    )
+    parser.add_argument(
+        "--no-materialized",
+        dest="use_materialized",
+        action="store_false",
+        help="Disable use of the materialized shots_wide table if present.",
+    )
+    parser.set_defaults(use_materialized=True)
+    parser.add_argument(
+        "--train-fraction",
+        type=float,
+        default=0.8,
+        help="Fraction of samples to allocate to the training split (default: 0.8).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed controlling the grouped split.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT_DIR,
+        help="Directory where train.csv and test.csv will be written.",
+    )
+    return parser.parse_args()
+
+
+def _metadata_columns(frame: pd.DataFrame) -> list[str]:
+    return [col for col in ["shot_id", "match_id"] if col in frame.columns]
+
+
+def _build_split_frame(
+    feature_matrix: pd.DataFrame,
+    source: pd.DataFrame,
+    indices: Sequence[int],
+    target: pd.Series,
+) -> pd.DataFrame:
+    """Combine feature matrix with metadata and target column."""
+
+    frame = feature_matrix.iloc[indices].reset_index(drop=True)
+    metadata_cols = _metadata_columns(source)
+
+    for column in metadata_cols:
+        frame.insert(0, column, source.iloc[indices][column].to_numpy())
+
+    frame["target"] = target.iloc[indices].to_numpy()
+    return frame
+
+
+def ensure_directory(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
+    args = parse_args()
+
+    np.random.seed(args.seed)
+
+    wide_df = load_wide_df(args.database_path, use_materialized=args.use_materialized)
+    if wide_df is None or wide_df.empty:
+        logger.error("No data available at %s.", args.database_path)
+        return 1
+
+    shots_df, target = prepare_shot_dataframe(wide_df)
+    if len(shots_df) == 0:
+        logger.error("No shots remain after filtering.")
+        return 1
+
+    feature_matrix = build_feature_matrix(shots_df)
+    groups = shots_df["match_id"] if "match_id" in shots_df.columns else None
+    train_indices, test_indices = grouped_train_test_split(
+        feature_matrix,
+        target,
+        groups,
+        train_fraction=args.train_fraction,
+        seed=args.seed,
+    )
+
+    if len(train_indices) == 0:
+        logger.error("Training split is empty; aborting feature export.")
+        return 1
+
+    train_df = _build_split_frame(feature_matrix, shots_df, train_indices, target)
+    if len(test_indices):
+        test_df = _build_split_frame(feature_matrix, shots_df, test_indices, target)
+    else:
+        test_df = pd.DataFrame(columns=train_df.columns)
+
+    ensure_directory(args.output_dir)
+    train_path = args.output_dir / "train.csv"
+    test_path = args.output_dir / "test.csv"
+
+    train_df.to_csv(train_path, index=False)
+    test_df.to_csv(test_path, index=False)
+
+    logger.info(
+        "Saved %d training rows and %d test rows to %s",
+        len(train_df),
+        len(test_df),
+        args.output_dir,
+    )
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
