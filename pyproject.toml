@@ -16,6 +16,8 @@ numpy = "<2.0"
 seaborn = "^0.13.2"
 matplotlib = "^3.9.2"
 ollama = "^0.3.3"
+fastapi = "^0.115.5"
+uvicorn = {version = "^0.32.1", extras = ["standard"]}
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2"
