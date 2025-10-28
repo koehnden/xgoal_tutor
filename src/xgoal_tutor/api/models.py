@@ -79,10 +79,6 @@ class ShotPredictionRequest(BaseModel):
 
     shots: List[ShotFeatures]
     model: LogisticRegressionModel
-    prompt: str = Field(
-        ...,
-        description="Prompt that will be combined with shot insights and sent to the language model",
-    )
     llm_model: Optional[str] = Field(
         default=None,
         description="Optional override for the Ollama model to use for explanations",

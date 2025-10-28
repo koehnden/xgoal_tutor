@@ -21,6 +21,13 @@ from xgoal_tutor.llm.client import OllamaConfig, OllamaLLM
 from xgoal_tutor.modeling.feature_engineering import build_feature_matrix
 
 
+_BASE_SUMMARY_PROMPT = (
+    "You are xGoal Tutor, an assistant who explains expected goals (xG) "
+    "predictions for football shots. Craft a concise narrative for coaches, "
+    "highlighting why each shot's probability looks the way it does."
+)
+
+
 def create_llm_client() -> OllamaLLM:
     """Initialise an Ollama client with sensible defaults."""
 
@@ -97,6 +104,14 @@ def build_summary(predictions: Iterable[ShotPrediction]) -> str:
             f"Shot {shot_label}: xG={prediction.xg:.3f}{'; ' + top_features if top_features else ''}"
         )
     return "\n".join(lines)
+
+
+def build_llm_prompt(summary: str) -> str:
+    """Combine the fixed instruction prompt with the per-request summary."""
+
+    if summary:
+        return f"{_BASE_SUMMARY_PROMPT}\n\nShot analytics:\n{summary}"
+    return _BASE_SUMMARY_PROMPT
 
 
 def group_predictions_by_match(

@@ -13,6 +13,7 @@ from xgoal_tutor.api.models import (
 )
 from xgoal_tutor.api.services import (
     build_feature_dataframe,
+    build_llm_prompt,
     build_summary,
     calculate_probabilities,
     create_llm_client,
@@ -49,7 +50,7 @@ def predict_shots(payload: ShotPredictionRequest) -> ShotPredictionResponse:
         )
 
     summary = build_summary(predictions)
-    llm_prompt = f"{payload.prompt.strip()}\n\nShot analytics:\n{summary}" if summary else payload.prompt
+    llm_prompt = build_llm_prompt(summary)
 
     try:
         llm_response, model_used = _LLM_CLIENT.generate(llm_prompt, model=payload.llm_model)
