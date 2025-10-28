@@ -1,0 +1,280 @@
+openapi: 3.0.3
+info:
+  title: xGoal Inference Service
+  version: 1.0.0
+  description: |
+    REST API providing logistic-regression based expected goal (xG) predictions
+    and natural-language explanations generated with an Ollama hosted model.
+servers:
+  - url: http://localhost:8000
+paths:
+  /predict_shots:
+    post:
+      summary: Predict xG and explanations using the managed prompt
+      operationId: predictShots
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShotPredictionRequest'
+            example:
+              shots:
+                - shot_id: shot-1
+                  match_id: match-001
+                  start_x: 35.2
+                  start_y: 18.4
+                  is_set_piece: false
+                  is_corner: false
+                - shot_id: shot-2
+                  match_id: match-001
+                  start_x: 12.1
+                  start_y: 8.3
+                  is_set_piece: true
+                  is_free_kick: true
+              model:
+                intercept: -1.4
+                coefficients:
+                  start_x: 0.05
+                  start_y: -0.03
+                  is_set_piece: 0.2
+                  is_corner: -0.15
+              llm_model: qwen2.5:7b-instruct-q4_0
+      responses:
+        '200':
+          description: Successful response containing predictions and explanation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShotPredictionResponse'
+        '400':
+          description: Invalid payload supplied
+        '502':
+          description: Failed to retrieve a response from the Ollama model
+  /predict_shots_with_prompt:
+    post:
+      summary: Predict xG and explanations with a custom prompt override
+      operationId: predictShotsWithPrompt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShotPredictionWithPromptRequest'
+            example:
+              shots:
+                - shot_id: shot-1
+                  match_id: match-002
+                  start_x: 25.0
+                  start_y: 10.0
+              model:
+                intercept: -1.4
+                coefficients:
+                  start_x: 0.05
+                  start_y: -0.03
+              llm_model: mistral:7b-instruct-q4_0
+              prompt: >-
+                Provide a tactical summary of the shooting opportunity focusing on
+                pressure and angle, and keep the answer under 120 words.
+      responses:
+        '200':
+          description: Successful response containing predictions and explanation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShotPredictionResponse'
+        '400':
+          description: Invalid payload supplied
+        '502':
+          description: Failed to retrieve a response from the Ollama model
+  /match/{match_id}/shots:
+    get:
+      summary: Retrieve cached predictions for a match
+      operationId: getMatchShots
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Identifier of the match to retrieve cached predictions for
+      responses:
+        '200':
+          description: Cached predictions for the match
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShotPredictionResponse'
+        '404':
+          description: No cached predictions were found for the requested match
+components:
+  schemas:
+    ShotPredictionRequest:
+      type: object
+      required:
+        - shots
+        - model
+      properties:
+        shots:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShotFeatures'
+        model:
+          $ref: '#/components/schemas/LogisticRegressionModel'
+        llm_model:
+          type: string
+          nullable: true
+          description: Optional override for the Ollama model to use
+    ShotPredictionWithPromptRequest:
+      allOf:
+        - $ref: '#/components/schemas/ShotPredictionRequest'
+        - type: object
+          required:
+            - prompt
+          properties:
+            prompt:
+              type: string
+              description: Custom prompt text sent directly to the language model
+    ShotPredictionResponse:
+      type: object
+      required:
+        - shots
+        - explanation
+        - llm_model
+      properties:
+        shots:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShotPrediction'
+        explanation:
+          type: string
+          description: Natural-language explanation returned by the language model
+        llm_model:
+          type: string
+          description: Name of the Ollama model that produced the explanation
+    ShotPrediction:
+      type: object
+      required:
+        - xg
+        - reason_codes
+      properties:
+        shot_id:
+          type: string
+          nullable: true
+        match_id:
+          type: string
+          nullable: true
+        xg:
+          type: number
+          format: float
+          description: Expected goal probability for the shot
+        reason_codes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReasonCode'
+    ReasonCode:
+      type: object
+      required:
+        - feature
+        - value
+        - coefficient
+        - contribution
+      properties:
+        feature:
+          type: string
+        value:
+          type: number
+          format: float
+        coefficient:
+          type: number
+          format: float
+        contribution:
+          type: number
+          format: float
+    LogisticRegressionModel:
+      type: object
+      required:
+        - intercept
+        - coefficients
+      properties:
+        intercept:
+          type: number
+          format: float
+          description: Intercept term of the logistic regression model
+        coefficients:
+          type: object
+          additionalProperties:
+            type: number
+            format: float
+          description: Mapping of feature names to coefficient values
+    ShotFeatures:
+      type: object
+      required:
+        - start_x
+        - start_y
+      properties:
+        shot_id:
+          type: string
+          nullable: true
+          description: Identifier of the shot within the match or dataset
+        match_id:
+          type: string
+          nullable: true
+          description: Identifier of the match the shot belongs to
+        start_x:
+          type: number
+          format: float
+        start_y:
+          type: number
+          format: float
+        is_set_piece:
+          type: boolean
+          default: false
+        is_corner:
+          type: boolean
+          default: false
+        is_free_kick:
+          type: boolean
+          default: false
+        first_time:
+          type: boolean
+          nullable: true
+        under_pressure:
+          type: boolean
+          nullable: true
+        body_part:
+          type: string
+          nullable: true
+        ff_keeper_x:
+          type: number
+          format: float
+          nullable: true
+        ff_keeper_y:
+          type: number
+          format: float
+          nullable: true
+        ff_opponents:
+          type: number
+          format: float
+          nullable: true
+        freeze_frame_available:
+          type: integer
+          nullable: true
+        ff_keeper_count:
+          type: integer
+          nullable: true
+        one_on_one:
+          type: boolean
+          nullable: true
+        open_goal:
+          type: boolean
+          nullable: true
+        follows_dribble:
+          type: boolean
+          nullable: true
+        deflected:
+          type: boolean
+          nullable: true
+        aerial_won:
+          type: boolean
+          nullable: true
