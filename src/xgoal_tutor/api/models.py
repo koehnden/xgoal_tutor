@@ -97,6 +97,14 @@ class ShotPredictionRequest(BaseModel):
         return value
 
 
+class ShotPredictionWithPromptRequest(ShotPredictionRequest):
+    """Payload for /predict_shots_with_prompt allowing manual prompt overrides."""
+
+    prompt: str = Field(
+        ..., description="Custom instruction block sent directly to the language model"
+    )
+
+
 class ShotPredictionResponse(BaseModel):
     """Response returned by /predict_shots."""
 

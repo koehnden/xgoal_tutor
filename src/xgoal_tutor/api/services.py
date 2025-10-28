@@ -50,6 +50,30 @@ def build_feature_dataframe(shots: Iterable[ShotFeatures]) -> pd.DataFrame:
     return build_feature_matrix(frame)
 
 
+def generate_shot_predictions(
+    shots: Sequence[ShotFeatures], model: LogisticRegressionModel
+) -> Tuple[List[ShotPrediction], pd.DataFrame]:
+    """Produce model predictions and contribution breakdowns for the provided shots."""
+
+    feature_frame = build_feature_dataframe(shots)
+    probabilities, contributions = calculate_probabilities(feature_frame, model)
+
+    predictions: List[ShotPrediction] = []
+    for index, shot in enumerate(shots):
+        row_contrib = contributions.iloc[index]
+        reason_codes = format_reason_codes(feature_frame.iloc[index], row_contrib, model)
+        predictions.append(
+            ShotPrediction(
+                shot_id=shot.shot_id,
+                match_id=shot.match_id,
+                xg=float(probabilities.iloc[index]),
+                reason_codes=reason_codes,
+            )
+        )
+
+    return predictions, contributions
+
+
 def calculate_probabilities(
     features: pd.DataFrame, model: LogisticRegressionModel
 ) -> Tuple[pd.Series, pd.DataFrame]:
@@ -93,6 +117,26 @@ def format_reason_codes(
         if len(reason_codes) >= max_reasons:
             break
     return reason_codes
+
+
+def generate_llm_explanation(
+    client: OllamaLLM,
+    shots: Sequence[ShotFeatures],
+    predictions: Sequence[ShotPrediction],
+    contributions: pd.DataFrame,
+    *,
+    llm_model: Optional[str] = None,
+    prompt_override: Optional[str] = None,
+) -> Tuple[str, str]:
+    """Create an explanation for the predictions via the configured LLM."""
+
+    if prompt_override is None:
+        events = build_event_inputs(shots, predictions, contributions)
+        prompt = build_llm_prompt(events)
+    else:
+        prompt = prompt_override
+
+    return client.generate(prompt, model=llm_model)
 
 
 def build_event_inputs(

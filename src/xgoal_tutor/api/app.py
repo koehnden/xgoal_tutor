@@ -2,22 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict
 
 from fastapi import FastAPI, HTTPException
 
 from xgoal_tutor.api.models import (
-    ShotPrediction,
     ShotPredictionRequest,
     ShotPredictionResponse,
+    ShotPredictionWithPromptRequest,
 )
 from xgoal_tutor.api.services import (
-    build_event_inputs,
-    build_feature_dataframe,
-    build_llm_prompt,
-    calculate_probabilities,
     create_llm_client,
-    format_reason_codes,
+    generate_llm_explanation,
+    generate_shot_predictions,
     group_predictions_by_match,
 )
 
@@ -33,31 +30,58 @@ def predict_shots(payload: ShotPredictionRequest) -> ShotPredictionResponse:
     if not payload.shots:
         raise HTTPException(status_code=400, detail="At least one shot must be provided")
 
-    feature_frame = build_feature_dataframe(payload.shots)
-    probabilities, contributions = calculate_probabilities(feature_frame, payload.model)
-
-    predictions: List[ShotPrediction] = []
-    for index, shot in enumerate(payload.shots):
-        row_contrib = contributions.iloc[index]
-        reason_codes = format_reason_codes(feature_frame.iloc[index], row_contrib, payload.model)
-        predictions.append(
-            ShotPrediction(
-                shot_id=shot.shot_id,
-                match_id=shot.match_id,
-                xg=float(probabilities.iloc[index]),
-                reason_codes=reason_codes,
-            )
-        )
-
-    events = build_event_inputs(payload.shots, predictions, contributions)
-    llm_prompt = build_llm_prompt(events)
+    predictions, contributions = generate_shot_predictions(payload.shots, payload.model)
 
     try:
-        llm_response, model_used = _LLM_CLIENT.generate(llm_prompt, model=payload.llm_model)
+        llm_response, model_used = generate_llm_explanation(
+            _LLM_CLIENT,
+            payload.shots,
+            predictions,
+            contributions,
+            llm_model=payload.llm_model,
+        )
     except RuntimeError as exc:  # pragma: no cover - network error path
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     response = ShotPredictionResponse(shots=predictions, explanation=llm_response.strip(), llm_model=model_used)
+
+    for match_id, match_predictions in group_predictions_by_match(predictions).items():
+        cached_response = ShotPredictionResponse(
+            shots=list(match_predictions),
+            explanation=response.explanation,
+            llm_model=response.llm_model,
+        )
+        _MATCH_CACHE[match_id] = cached_response
+
+    return response
+
+
+@app.post("/predict_shots_with_prompt", response_model=ShotPredictionResponse)
+def predict_shots_with_prompt(
+    payload: ShotPredictionWithPromptRequest,
+) -> ShotPredictionResponse:
+    if not payload.shots:
+        raise HTTPException(status_code=400, detail="At least one shot must be provided")
+
+    predictions, contributions = generate_shot_predictions(payload.shots, payload.model)
+
+    try:
+        llm_response, model_used = generate_llm_explanation(
+            _LLM_CLIENT,
+            payload.shots,
+            predictions,
+            contributions,
+            llm_model=payload.llm_model,
+            prompt_override=payload.prompt,
+        )
+    except RuntimeError as exc:  # pragma: no cover - network error path
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    response = ShotPredictionResponse(
+        shots=predictions,
+        explanation=llm_response.strip(),
+        llm_model=model_used,
+    )
 
     for match_id, match_predictions in group_predictions_by_match(predictions).items():
         cached_response = ShotPredictionResponse(
