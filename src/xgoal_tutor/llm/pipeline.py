@@ -117,6 +117,19 @@ class ExplanationPipeline:
         self._top_features = top_features
         self._temperature = temperature
 
+    def build_event_prompt(
+        self,
+        match_metadata: Dict[str, object],
+        event: EventExplanationInput,
+    ) -> str:
+        """Return the event-level prompt using the pipeline configuration."""
+
+        return build_event_prompt(
+            match_metadata,
+            event,
+            top_features=self._top_features,
+        )
+
     def run(
         self,
         match_metadata: Dict[str, object],
@@ -126,11 +139,7 @@ class ExplanationPipeline:
         event_results: List[EventExplanationResult] = []
 
         for event in events:
-            prompt = build_event_prompt(
-                match_metadata,
-                event,
-                top_features=self._top_features,
-            )
+            prompt = self.build_event_prompt(match_metadata, event)
             text, model_used = self._llm.generate(
                 prompt,
                 options={"temperature": self._temperature},

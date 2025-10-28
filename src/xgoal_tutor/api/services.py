@@ -185,7 +185,7 @@ def build_llm_prompt(
 
     metadata = match_metadata or {}
     event_prompts = [
-        _PROMPT_PIPELINE._build_event_prompt(metadata, event) for event in events
+        _PROMPT_PIPELINE.build_event_prompt(metadata, event) for event in events
     ]
 
     if len(event_prompts) == 1:
