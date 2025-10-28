@@ -1,38 +1,52 @@
 # xG Tutor
 
-## Installation
+## Overview
+xG Tutor is an end-to-end teaching tool that helps analysts explore expected-goal (xG) insights. It ingests StatsBomb open-data event files, trains a logistic-regression model to estimate shot quality, serves predictions through a FastAPI service, and leverages a local large language model (LLM) to produce plain-language explanations alongside structured metrics.
 
-This project uses [Poetry](https://python-poetry.org/) for dependency management. To
-set up a local development environment, install Poetry and then run:
+## Architecture and flow
+1. **StatsBomb ETL (`src/xgoal_tutor/etl`)** – Utilities download match event JSON from either local paths or the public StatsBomb GitHub repository, normalise the schema, and persist the data for downstream modelling. The `ingest_statsbomb.py` script under `scripts/` orchestrates these helpers for bulk loading.
+2. **Feature engineering and modelling (`src/xgoal_tutor/modeling`)** – Feature builders transform raw events into model-ready tensors. The logistic-regression model applies calibrated coefficients to generate xG probabilities and reason codes for the top contributing features.
+3. **Explanation pipeline (`src/xgoal_tutor/llm`)** – The LLM layer wraps a locally running [Ollama](https://ollama.com/) server. Prediction outputs are converted into templated prompts so the chosen Ollama model can produce analyst-friendly summaries. Fallback models ensure robustness when the preferred model is unavailable.
+4. **Inference API (`src/xgoal_tutor/api`)** – A FastAPI application exposes prediction endpoints. Incoming shot payloads are scored by the model, cached by match, and optionally enriched with custom prompts before being returned to clients.
+
+The typical flow is: ingest StatsBomb events → engineer features → score shots via the logistic-regression model → request human-readable context from the LLM → retrieve results through the FastAPI endpoints.
+
+## API surface
+The FastAPI app exposes three primary routes:
+- `POST /predict_shots` – Score one or more shots and automatically request an explanation from the LLM.
+- `POST /predict_shots_with_prompt` – Same as above, but accepts a custom prompt override.
+- `GET /match/{match_id}/shots` – Retrieve the most recent cached predictions for a match.
+
+Refer to [`docs/swagger.yaml`](docs/swagger.yaml) for the OpenAPI definition and [`docs/xgoal_postman_collection.json`](docs/xgoal_postman_collection.json) for ready-made Postman examples covering request payloads and typical responses.
+
+## Running the FastAPI service
+1. **Install dependencies**
+   ```bash
+   poetry install
+   ```
+2. **Start an Ollama server** – Install Ollama and run `ollama serve` (or ensure an existing instance is available at `http://localhost:11434`). Pull the primary and fallback models referenced in `src/xgoal_tutor/api/models.py` using `ollama pull <model-name>`.
+3. **Launch the API**
+   ```bash
+   poetry run uvicorn xgoal_tutor.api.app:app --reload
+   ```
+   The service hosts interactive docs at `http://127.0.0.1:8000/docs`.
+
+## Running the ingestion helper
+Use the StatsBomb ingestion script to populate a SQLite database with open-data events:
 
 ```bash
-poetry install
-```
-
-Poetry will create (or reuse) a virtual environment and install all required
-dependencies from `pyproject.toml`.
-
-## Ingestion pipeline
-
-You can ingest one or more StatsBomb open-data event files—either from your
-local machine or directly from the public GitHub repository—using the
-`ingest_statsbomb.py` helper script:
-
-```bash
-poetry run python src/scripts/ingest_statsbomb.py \
+poetry run python scripts/ingest_statsbomb.py \
   data/events/123456.json \
   --database xgoal-db.sqlite
 ```
 
-The script accepts:
+The script accepts individual files, directories, or GitHub tree URLs and supports a `--stop-on-error` flag to halt on the first failure.
 
-- A path to a single local JSON events file.
-- A directory containing multiple JSON files (it will recurse through the
-  directory and load each file).
-- A GitHub tree URL such as
-  `https://github.com/statsbomb/open-data/tree/master/data/events`, in which case
-  all JSON files within that directory are downloaded temporarily and ingested.
+## Testing
+Execute the unit test suite with:
 
-Use the `--database` option to specify the SQLite file to populate (it defaults
-to `xgoal-db.sqlite`). Add `--stop-on-error` to halt immediately when an import
-fails instead of continuing with the remaining files.
+```bash
+poetry run pytest
+```
+
+Ensure the Ollama service is reachable when exercising tests that touch the LLM client.
