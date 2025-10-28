@@ -181,5 +181,3 @@ class ExplanationPipeline:
             event_explanations=event_results,
             models_used=models_used,
         )
-
-    # Prompt builders are now defined in ``prompts.py``.
