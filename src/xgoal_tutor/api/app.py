@@ -12,9 +12,9 @@ from xgoal_tutor.api.models import (
     ShotPredictionResponse,
 )
 from xgoal_tutor.api.services import (
+    build_event_inputs,
     build_feature_dataframe,
     build_llm_prompt,
-    build_summary,
     calculate_probabilities,
     create_llm_client,
     format_reason_codes,
@@ -49,8 +49,8 @@ def predict_shots(payload: ShotPredictionRequest) -> ShotPredictionResponse:
             )
         )
 
-    summary = build_summary(predictions)
-    llm_prompt = build_llm_prompt(summary)
+    events = build_event_inputs(payload.shots, predictions, contributions)
+    llm_prompt = build_llm_prompt(events)
 
     try:
         llm_response, model_used = _LLM_CLIENT.generate(llm_prompt, model=payload.llm_model)
