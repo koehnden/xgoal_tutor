@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class LogisticRegressionModel(BaseModel):
@@ -15,7 +15,8 @@ class LogisticRegressionModel(BaseModel):
         ..., description="Mapping from feature name to coefficient value"
     )
 
-    @validator("coefficients")
+    @field_validator("coefficients")
+    @classmethod
     def _ensure_non_empty(cls, value: Dict[str, float]) -> Dict[str, float]:
         if not value:
             raise ValueError("At least one coefficient must be provided")
@@ -84,7 +85,8 @@ class ShotPredictionRequest(BaseModel):
         description="Optional override for the Ollama model to use for explanations",
     )
 
-    @validator("llm_model")
+    @field_validator("llm_model")
+    @classmethod
     def _validate_llm_model(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value
