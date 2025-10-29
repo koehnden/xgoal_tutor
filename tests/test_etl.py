@@ -24,6 +24,10 @@ def sample_events(tmp_path: Path) -> Path:
             "opponent": {"id": 200, "name": "Team B"},
             "player": {"id": 10, "name": "Playmaker"},
             "match_id": 1,
+            "match": {
+                "home_team": {"id": 100, "name": "Team A"},
+                "away_team": {"id": 200, "name": "Team B"},
+            },
             "possession": 15,
             "possession_team": {"id": 100, "name": "Team A"},
             "location": [80.0, 30.0],

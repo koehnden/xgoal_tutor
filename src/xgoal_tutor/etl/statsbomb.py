@@ -97,11 +97,16 @@ def _initialise_schema(connection: sqlite3.Connection) -> None:
 
 def _collect_dimension_data(
     events: Sequence[MutableEvent],
-) -> Tuple[Dict[int, str], Dict[int, str], Dict[int, Tuple[Optional[int], Optional[int], Optional[str], Optional[str]]]]:
+) -> Tuple[
+    Dict[int, str],
+    Dict[int, str],
+    Dict[int, Tuple[Optional[int], Optional[int], Optional[str], Optional[str]]],
+]:
     teams: Dict[int, str] = {}
     players: Dict[int, str] = {}
     match_team_names: Dict[int, Dict[int, str]] = {}
-    match_team_order: Dict[int, List[int]] = {}
+    match_home: Dict[int, Tuple[Optional[int], Optional[str]]] = {}
+    match_away: Dict[int, Tuple[Optional[int], Optional[str]]] = {}
 
     for event in events:
         match_id = _get_int(event.get("match_id"))
@@ -117,9 +122,30 @@ def _collect_dimension_data(
             if match_id is None:
                 return
             match_team_names.setdefault(match_id, {})[team_id] = name
-            order = match_team_order.setdefault(match_id, [])
-            if team_id not in order:
-                order.append(team_id)
+
+        def register_match_side(entity: Any, *, role: str) -> None:
+            if not isinstance(entity, Mapping):
+                return
+            if match_id is None:
+                return
+
+            team_id = _get_int(entity.get("id"))
+            name = _get_str(entity.get("name"))
+
+            target = match_home if role == "home" else match_away
+            existing_id, existing_name = target.get(match_id, (None, None))
+
+            if existing_id is None and team_id is not None:
+                existing_id = team_id
+            if not existing_name and name:
+                existing_name = name
+
+            if existing_id is not None or existing_name:
+                target[match_id] = (existing_id, existing_name)
+
+            if team_id is not None and name:
+                teams.setdefault(team_id, name)
+                match_team_names.setdefault(match_id, {})[team_id] = name
 
         def register_player(entity: Any) -> None:
             if not isinstance(entity, Mapping):
@@ -135,6 +161,10 @@ def _collect_dimension_data(
                 key_lower = key.lower() if isinstance(key, str) else ""
                 if key_lower == "opponent" or (key_lower and "team" in key_lower):
                     register_team(value)
+                if key_lower == "home_team":
+                    register_match_side(value, role="home")
+                elif key_lower == "away_team":
+                    register_match_side(value, role="away")
                 if (
                     key_lower
                     and (
@@ -155,14 +185,19 @@ def _collect_dimension_data(
     for match_id, teams_by_id in match_team_names.items():
         if not teams_by_id:
             continue
-        order = match_team_order.get(match_id, [])
-        home_team_id = order[0] if len(order) >= 1 else None
-        away_team_id = order[1] if len(order) >= 2 else None
+        home_team_id, home_team_name = match_home.get(match_id, (None, None))
+        away_team_id, away_team_name = match_away.get(match_id, (None, None))
+
+        if home_team_name is None and home_team_id is not None:
+            home_team_name = teams_by_id.get(home_team_id)
+        if away_team_name is None and away_team_id is not None:
+            away_team_name = teams_by_id.get(away_team_id)
+
         matches[match_id] = (
             home_team_id,
             away_team_id,
-            teams_by_id.get(home_team_id) if home_team_id is not None else None,
-            teams_by_id.get(away_team_id) if away_team_id is not None else None,
+            home_team_name,
+            away_team_name,
         )
 
     return teams, players, matches
