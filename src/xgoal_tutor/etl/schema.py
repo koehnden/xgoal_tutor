@@ -3,6 +3,32 @@ from __future__ import annotations
 
 CREATE_TABLE_STATEMENTS = (
     """
+    CREATE TABLE IF NOT EXISTS teams (
+        team_id INTEGER PRIMARY KEY,
+        team_name TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS players (
+        player_id INTEGER PRIMARY KEY,
+        player_name TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS matches (
+        match_id INTEGER PRIMARY KEY,
+        home_team_id INTEGER,
+        away_team_id INTEGER,
+        home_team_name TEXT,
+        away_team_name TEXT,
+        competition_name TEXT,
+        season_name TEXT,
+        match_date TEXT,
+        venue TEXT,
+        match_label TEXT
+    );
+    """,
+    """
     CREATE TABLE IF NOT EXISTS events (
         event_id TEXT PRIMARY KEY,
         match_id INTEGER,
@@ -64,7 +90,10 @@ CREATE_TABLE_STATEMENTS = (
         is_kick_off INTEGER,
         is_own_goal INTEGER,
         freeze_frame_available INTEGER,
-        freeze_frame_count INTEGER
+        freeze_frame_count INTEGER,
+        is_goal INTEGER,
+        score_home INTEGER,
+        score_away INTEGER
     );
     """,
     """
@@ -78,6 +107,37 @@ CREATE_TABLE_STATEMENTS = (
         keeper INTEGER NOT NULL,
         x REAL,
         y REAL,
+        FOREIGN KEY (shot_id) REFERENCES shots(shot_id) ON DELETE CASCADE
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS xg_predictions (
+        prediction_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        shot_id TEXT NOT NULL,
+        xg REAL NOT NULL,
+        llm_model TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (shot_id) REFERENCES shots(shot_id) ON DELETE CASCADE
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS reason_codes (
+        reason_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        prediction_id INTEGER NOT NULL,
+        feature TEXT NOT NULL,
+        value REAL,
+        coefficient REAL,
+        contribution REAL,
+        FOREIGN KEY (prediction_id) REFERENCES xg_predictions(prediction_id) ON DELETE CASCADE
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS explanations (
+        explanation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        shot_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        llm_model TEXT,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (shot_id) REFERENCES shots(shot_id) ON DELETE CASCADE
     );
     """,
@@ -145,4 +205,7 @@ SHOT_COLUMNS: Tuple[str, ...] = (
     "is_own_goal",
     "freeze_frame_available",
     "freeze_frame_count",
+    "is_goal",
+    "score_home",
+    "score_away",
 )
