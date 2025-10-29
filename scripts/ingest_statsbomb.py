@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Iterable, Iterator, List, Optional
 from urllib.parse import urlparse
 
-from xgoal_tutor.etl import load_match_events
+from xgoal_tutor.etl import load_match_events, prepare_metadata_cache
 from xgoal_tutor.etl.download_helper import download_github_directory_jsons
 
 
@@ -83,6 +83,7 @@ def ingest(inputs: List[str], db_path: Path, stop_on_error: bool = False) -> Non
         for input_arg in inputs:
             for events_path in iter_event_files(input_arg):
                 try:
+                    prepare_metadata_cache(events_path)
                     load_match_events(events_path, db_path, connection=connection)
                     processed += 1
                 except Exception as exc:
