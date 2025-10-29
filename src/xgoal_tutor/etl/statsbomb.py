@@ -39,6 +39,8 @@ def _load_into_connection(
 ) -> None:
     connection.row_factory = sqlite3.Row
     _initialise_schema(connection)
+    teams, players, matches = _collect_dimension_data(events)
+    _insert_dimension_tables(connection, teams, players, matches)
     _insert_events(connection, events, match_teams)
     _insert_shots_and_freeze_frames(connection, events, match_teams)
 
@@ -91,6 +93,177 @@ def _initialise_schema(connection: sqlite3.Connection) -> None:
 
     for statement in CREATE_INDEX_STATEMENTS:
         connection.execute(statement)
+
+
+def _collect_dimension_data(
+    events: Sequence[MutableEvent],
+) -> Tuple[
+    Dict[int, str],
+    Dict[int, str],
+    Dict[int, Tuple[Optional[int], Optional[int], Optional[str], Optional[str]]],
+]:
+    teams: Dict[int, str] = {}
+    players: Dict[int, str] = {}
+    match_team_names: Dict[int, Dict[int, str]] = {}
+    match_home: Dict[int, Tuple[Optional[int], Optional[str]]] = {}
+    match_away: Dict[int, Tuple[Optional[int], Optional[str]]] = {}
+
+    for event in events:
+        match_id = _get_int(event.get("match_id"))
+
+        def register_team(entity: Any) -> None:
+            if not isinstance(entity, Mapping):
+                return
+            team_id = _get_int(entity.get("id"))
+            name = _get_str(entity.get("name"))
+            if team_id is None or not name:
+                return
+            teams.setdefault(team_id, name)
+            if match_id is None:
+                return
+            match_team_names.setdefault(match_id, {})[team_id] = name
+
+        def register_match_side(entity: Any, *, role: str) -> None:
+            if not isinstance(entity, Mapping):
+                return
+            if match_id is None:
+                return
+
+            team_id = _get_int(entity.get("id"))
+            name = _get_str(entity.get("name"))
+
+            target = match_home if role == "home" else match_away
+            existing_id, existing_name = target.get(match_id, (None, None))
+
+            if existing_id is None and team_id is not None:
+                existing_id = team_id
+            if not existing_name and name:
+                existing_name = name
+
+            if existing_id is not None or existing_name:
+                target[match_id] = (existing_id, existing_name)
+
+            if team_id is not None and name:
+                teams.setdefault(team_id, name)
+                match_team_names.setdefault(match_id, {})[team_id] = name
+
+        def register_player(entity: Any) -> None:
+            if not isinstance(entity, Mapping):
+                return
+            player_id = _get_int(entity.get("id"))
+            name = _get_str(entity.get("name"))
+            if player_id is None or not name:
+                return
+            players.setdefault(player_id, name)
+
+        def visit(value: Any, key: Optional[str]) -> None:
+            if isinstance(value, Mapping):
+                key_lower = key.lower() if isinstance(key, str) else ""
+                if key_lower == "opponent" or (key_lower and "team" in key_lower):
+                    register_team(value)
+                if key_lower == "home_team":
+                    register_match_side(value, role="home")
+                elif key_lower == "away_team":
+                    register_match_side(value, role="away")
+                if (
+                    key_lower
+                    and (
+                        "player" in key_lower
+                        or key_lower in {"recipient", "replacement"}
+                    )
+                ):
+                    register_player(value)
+                for child_key, child_value in value.items():
+                    visit(child_value, child_key)
+            elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+                for item in value:
+                    visit(item, None)
+
+        visit(event, None)
+
+    matches: Dict[int, Tuple[Optional[int], Optional[int], Optional[str], Optional[str]]] = {}
+    for match_id, teams_by_id in match_team_names.items():
+        if not teams_by_id:
+            continue
+        home_team_id, home_team_name = match_home.get(match_id, (None, None))
+        away_team_id, away_team_name = match_away.get(match_id, (None, None))
+
+        if home_team_name is None and home_team_id is not None:
+            home_team_name = teams_by_id.get(home_team_id)
+        if away_team_name is None and away_team_id is not None:
+            away_team_name = teams_by_id.get(away_team_id)
+
+        matches[match_id] = (
+            home_team_id,
+            away_team_id,
+            home_team_name,
+            away_team_name,
+        )
+
+    return teams, players, matches
+
+
+def _insert_dimension_tables(
+    connection: sqlite3.Connection,
+    teams: Mapping[int, str],
+    players: Mapping[int, str],
+    matches: Mapping[int, Tuple[Optional[int], Optional[int], Optional[str], Optional[str]]],
+) -> None:
+    _bulk_upsert(
+        connection,
+        "teams",
+        ("team_id", "team_name"),
+        ((team_id, name) for team_id, name in teams.items()),
+    )
+    _bulk_upsert(
+        connection,
+        "players",
+        ("player_id", "player_name"),
+        ((player_id, name) for player_id, name in players.items()),
+    )
+    _bulk_upsert(
+        connection,
+        "matches",
+        ("match_id", "home_team_id", "away_team_id", "home_team_name", "away_team_name"),
+        (
+            (
+                match_id,
+                home_team_id,
+                away_team_id,
+                home_team_name,
+                away_team_name,
+            )
+            for match_id, (home_team_id, away_team_id, home_team_name, away_team_name) in matches.items()
+        ),
+    )
+
+
+def _bulk_upsert(
+    connection: sqlite3.Connection,
+    table: str,
+    columns: Sequence[str],
+    rows: Iterable[Sequence[Optional[Any]]],
+) -> None:
+    row_list = [tuple(row) for row in rows if row and row[0] is not None]
+    if not row_list:
+        return
+
+    placeholders = ", ".join("?" for _ in columns)
+    conflict_column = columns[0]
+    assignments = ", ".join(f"{column} = excluded.{column}" for column in columns[1:])
+    on_conflict = f" ON CONFLICT({conflict_column}) DO"
+    if assignments:
+        on_conflict += f" UPDATE SET {assignments}"
+    else:
+        on_conflict += " NOTHING"
+
+    connection.executemany(
+        f"""
+        INSERT INTO {table} ({', '.join(columns)})
+        VALUES ({placeholders}){on_conflict}
+        """,
+        row_list,
+    )
 
 
 def _insert_events(
