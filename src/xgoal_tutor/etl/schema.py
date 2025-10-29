@@ -3,6 +3,27 @@ from __future__ import annotations
 
 CREATE_TABLE_STATEMENTS = (
     """
+    CREATE TABLE IF NOT EXISTS teams (
+        team_id INTEGER PRIMARY KEY,
+        team_name TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS players (
+        player_id INTEGER PRIMARY KEY,
+        player_name TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS matches (
+        match_id INTEGER PRIMARY KEY,
+        home_team_id INTEGER,
+        away_team_id INTEGER,
+        home_team_name TEXT,
+        away_team_name TEXT
+    );
+    """,
+    """
     CREATE TABLE IF NOT EXISTS events (
         event_id TEXT PRIMARY KEY,
         match_id INTEGER,

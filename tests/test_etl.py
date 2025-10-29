@@ -128,6 +128,38 @@ def test_load_match_events_populates_sqlite(sample_events: Path, tmp_path: Path)
         events = conn.execute("SELECT COUNT(*) AS cnt FROM events").fetchone()
         assert events["cnt"] == 3
 
+        teams = conn.execute(
+            "SELECT team_id, team_name FROM teams ORDER BY team_id"
+        ).fetchall()
+        assert [(row["team_id"], row["team_name"]) for row in teams] == [
+            (100, "Team A"),
+            (200, "Team B"),
+        ]
+
+        players = conn.execute(
+            "SELECT player_id, player_name FROM players ORDER BY player_id"
+        ).fetchall()
+        assert {(row["player_id"], row["player_name"]) for row in players} == {
+            (9, "Striker"),
+            (10, "Playmaker"),
+            (11, "Winger"),
+            (14, "Midfielder"),
+            (30, "Goalkeeper"),
+        }
+
+        matches = conn.execute(
+            "SELECT match_id, home_team_id, away_team_id, home_team_name, away_team_name FROM matches"
+        ).fetchall()
+        assert [dict(row) for row in matches] == [
+            {
+                "match_id": 1,
+                "home_team_id": 100,
+                "away_team_id": 200,
+                "home_team_name": "Team A",
+                "away_team_name": "Team B",
+            }
+        ]
+
         shots = conn.execute(
             "SELECT * FROM shots ORDER BY shot_id"
         ).fetchall()
