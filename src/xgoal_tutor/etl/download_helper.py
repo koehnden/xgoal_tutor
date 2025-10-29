@@ -6,7 +6,6 @@ import json
 import logging
 import shutil
 import tarfile
-import sys
 import tempfile
 import zipfile
 from pathlib import Path
@@ -72,7 +71,11 @@ def download_github_directory_jsons(owner: str, repo: str, ref: str, subpath: st
         yield from _stream_tarball_events(owner, repo, ref, subpath)
         return
     except Exception as e:
-        logger.warning(f"[warn] Tarball streaming failed; trying per-file download: {e}", file=sys.stderr)
+        logger.warning(
+            "[warn] Tarball streaming failed; trying per-file download: %s",
+            e,
+            exc_info=True,
+        )
 
     try:
         paths = _list_events_with_trees_api(owner, repo, ref, subpath)
