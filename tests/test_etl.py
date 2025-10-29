@@ -26,6 +26,12 @@ def sample_events(tmp_path: Path) -> Path:
             "match_id": 1,
             "possession": 15,
             "possession_team": {"id": 100, "name": "Team A"},
+            "competition": {"id": 1, "name": "Friendly Cup"},
+            "season": {"id": 2023, "name": "2023/2024"},
+            "match_date": "2023-08-01",
+            "venue": "Test Stadium",
+            "home_team": {"id": 100, "name": "Team A"},
+            "away_team": {"id": 200, "name": "Team B"},
             "location": [80.0, 30.0],
             "pass": {
                 "recipient": {"id": 9, "name": "Striker"},
@@ -128,6 +134,30 @@ def test_load_match_events_populates_sqlite(sample_events: Path, tmp_path: Path)
         events = conn.execute("SELECT COUNT(*) AS cnt FROM events").fetchone()
         assert events["cnt"] == 3
 
+        teams = conn.execute(
+            "SELECT team_id, team_name FROM teams ORDER BY team_id"
+        ).fetchall()
+        assert [(row["team_id"], row["team_name"]) for row in teams] == [
+            (100, "Team A"),
+            (200, "Team B"),
+        ]
+
+        players = conn.execute("SELECT COUNT(*) AS cnt FROM players").fetchone()
+        assert players["cnt"] == 5
+
+        match = conn.execute(
+            "SELECT * FROM matches WHERE match_id = ?",
+            (1,),
+        ).fetchone()
+        assert match is not None
+        assert match["home_team_id"] == 100
+        assert match["away_team_id"] == 200
+        assert match["competition_name"] == "Friendly Cup"
+        assert match["season_name"] == "2023/2024"
+        assert match["match_date"] == "2023-08-01"
+        assert match["venue"] == "Test Stadium"
+        assert match["match_label"] == "Team A vs Team B"
+
         shots = conn.execute(
             "SELECT * FROM shots ORDER BY shot_id"
         ).fetchall()
@@ -141,11 +171,17 @@ def test_load_match_events_populates_sqlite(sample_events: Path, tmp_path: Path)
         assert pytest.approx(open_play_shot["statsbomb_xg"], rel=1e-5) == 0.34
         assert open_play_shot["start_x"] == 100.0
         assert open_play_shot["end_z"] == 1.0
+        assert open_play_shot["is_goal"] == 1
+        assert open_play_shot["score_home"] == 1
+        assert open_play_shot["score_away"] == 0
 
         free_kick_shot = shots[1]
         assert free_kick_shot["is_set_piece"] == 1
         assert free_kick_shot["is_free_kick"] == 1
         assert free_kick_shot["assist_type"] is None
+        assert free_kick_shot["is_goal"] == 0
+        assert free_kick_shot["score_home"] == 1
+        assert free_kick_shot["score_away"] == 0
 
         freeze_frames = conn.execute(
             "SELECT * FROM freeze_frames WHERE shot_id = ? ORDER BY keeper DESC",
@@ -188,6 +224,12 @@ def test_load_match_events_uses_filename_for_match_id(tmp_path: Path) -> None:
 
         assert stored is not None
         assert stored["match_id"] == 987654
+
+        match = conn.execute(
+            "SELECT match_id FROM matches WHERE match_id = ?",
+            (987654,),
+        ).fetchone()
+        assert match is not None
 
 
 def test_main_invokes_loader(monkeypatch: pytest.MonkeyPatch, sample_events: Path, tmp_path: Path) -> None:

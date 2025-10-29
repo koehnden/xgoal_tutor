@@ -23,24 +23,37 @@ def load_match_events(
                 event["match_id"] = match_id_override
 
     match_teams = _derive_match_teams(events)
+    teams, players, matches = _collect_reference_data(events, match_teams)
 
     if connection is None:
         with sqlite3.connect(db_path) as owned_connection:
-            _load_into_connection(owned_connection, events, match_teams)
+            _load_into_connection(
+                owned_connection,
+                events,
+                match_teams,
+                teams,
+                players,
+                matches,
+            )
             owned_connection.commit()
     else:
-        _load_into_connection(connection, events, match_teams)
+        _load_into_connection(connection, events, match_teams, teams, players, matches)
 
 
 def _load_into_connection(
     connection: sqlite3.Connection,
     events: Sequence[MutableEvent],
     match_teams: Mapping[int, Set[int]],
+    teams: Mapping[int, str],
+    players: Mapping[int, str],
+    matches: Mapping[int, Mapping[str, Any]],
 ) -> None:
     connection.row_factory = sqlite3.Row
     _initialise_schema(connection)
+    _insert_reference_data(connection, teams, players, matches)
     _insert_events(connection, events, match_teams)
-    _insert_shots_and_freeze_frames(connection, events, match_teams)
+    scorelines = _compute_shot_scoreboard(events, matches, match_teams)
+    _insert_shots_and_freeze_frames(connection, events, match_teams, scorelines)
 
 
 def _read_event_file(events_path: Path) -> List[MutableEvent]:
@@ -93,6 +106,222 @@ def _initialise_schema(connection: sqlite3.Connection) -> None:
         connection.execute(statement)
 
 
+def _collect_reference_data(
+    events: Sequence[MutableEvent], match_teams: Mapping[int, Set[int]]
+) -> Tuple[Dict[int, str], Dict[int, str], Dict[int, Dict[str, Any]]]:
+    teams: Dict[int, str] = {}
+    players: Dict[int, str] = {}
+    matches: Dict[int, Dict[str, Any]] = {}
+
+    for event in events:
+        _record_team(teams, event.get("team"))
+        _record_team(teams, event.get("opponent"))
+        _record_team(teams, event.get("possession_team"))
+
+        _record_player(players, event.get("player"))
+
+        pass_data = event.get("pass")
+        if isinstance(pass_data, Mapping):
+            _record_player(players, pass_data.get("recipient"))
+
+        shot_data = event.get("shot")
+        if isinstance(shot_data, Mapping):
+            freeze_frame = shot_data.get("freeze_frame")
+            if isinstance(freeze_frame, Sequence):
+                for frame in freeze_frame:
+                    if isinstance(frame, Mapping):
+                        _record_player(players, frame.get("player"))
+
+        match_id = _get_int(event.get("match_id"))
+        if match_id is None:
+            continue
+
+        match_record = matches.setdefault(
+            match_id,
+            {
+                "match_id": match_id,
+                "home_team_id": None,
+                "away_team_id": None,
+                "home_team_name": None,
+                "away_team_name": None,
+                "competition_name": None,
+                "season_name": None,
+                "match_date": None,
+                "venue": None,
+                "match_label": None,
+                "_team_names": {},
+            },
+        )
+
+        competition_name = _get_nested_str(event, ("competition", "name"))
+        if competition_name and not match_record["competition_name"]:
+            match_record["competition_name"] = competition_name
+
+        season_name = _get_nested_str(event, ("season", "name"))
+        if season_name and not match_record["season_name"]:
+            match_record["season_name"] = season_name
+
+        match_date = event.get("match_date") or _get_nested_str(event, ("match", "match_date"))
+        if match_date and not match_record["match_date"]:
+            match_record["match_date"] = _get_str(match_date)
+
+        venue = event.get("venue")
+        if venue and not match_record["venue"]:
+            if isinstance(venue, Mapping):
+                match_record["venue"] = _get_nested_str(venue, ("name",))
+            else:
+                match_record["venue"] = _get_str(venue)
+
+        stadium_name = _get_nested_str(event, ("stadium", "name"))
+        if stadium_name and not match_record["venue"]:
+            match_record["venue"] = stadium_name
+
+        for key, team_slot in (("home_team", "home"), ("away_team", "away")):
+            team_info = event.get(key)
+            if isinstance(team_info, Mapping):
+                team_id = _get_int(team_info.get("id"))
+                team_name = _get_str(team_info.get("name"))
+                if team_slot == "home" and team_id is not None and match_record["home_team_id"] is None:
+                    match_record["home_team_id"] = team_id
+                    if team_name:
+                        match_record["home_team_name"] = team_name
+                if team_slot == "away" and team_id is not None and match_record["away_team_id"] is None:
+                    match_record["away_team_id"] = team_id
+                    if team_name:
+                        match_record["away_team_name"] = team_name
+
+        for team_mapping in (event.get("team"), event.get("opponent"), event.get("possession_team")):
+            if isinstance(team_mapping, Mapping):
+                team_id = _get_int(team_mapping.get("id"))
+                if team_id is None:
+                    continue
+                team_name = _get_str(team_mapping.get("name"))
+                if team_name:
+                    match_record["_team_names"][team_id] = team_name
+
+    _finalise_match_info(matches, match_teams, teams)
+
+    return teams, players, matches
+
+
+def _record_team(store: MutableMapping[int, str], data: Any) -> None:
+    if not isinstance(data, Mapping):
+        return
+    team_id = _get_int(data.get("id"))
+    name = _get_str(data.get("name"))
+    if team_id is None or not name:
+        return
+    store.setdefault(team_id, name)
+
+
+def _record_player(store: MutableMapping[int, str], data: Any) -> None:
+    if not isinstance(data, Mapping):
+        return
+    player_id = _get_int(data.get("id"))
+    name = _get_str(data.get("name"))
+    if player_id is None or not name:
+        return
+    store.setdefault(player_id, name)
+
+
+def _finalise_match_info(
+    matches: Dict[int, Dict[str, Any]],
+    match_teams: Mapping[int, Set[int]],
+    teams: Mapping[int, str],
+) -> None:
+    for match_id, record in matches.items():
+        team_names: Dict[int, str] = record.get("_team_names", {})
+        for team_id in match_teams.get(match_id, set()):
+            if team_id not in team_names and team_id in teams:
+                team_names[team_id] = teams[team_id]
+
+        if record.get("home_team_id") is None or record.get("away_team_id") is None:
+            ordered = sorted(team_names)
+            if ordered:
+                if record.get("home_team_id") is None:
+                    record["home_team_id"] = ordered[0]
+                if record.get("away_team_id") is None and len(ordered) > 1:
+                    record["away_team_id"] = ordered[1]
+
+        if record.get("home_team_name") is None and record.get("home_team_id") is not None:
+            record["home_team_name"] = team_names.get(record["home_team_id"])
+
+        if record.get("away_team_name") is None and record.get("away_team_id") is not None:
+            record["away_team_name"] = team_names.get(record["away_team_id"])
+
+        if not record.get("match_label") and record.get("home_team_name") and record.get("away_team_name"):
+            record["match_label"] = f"{record['home_team_name']} vs {record['away_team_name']}"
+
+        record.pop("_team_names", None)
+
+
+def _insert_reference_data(
+    connection: sqlite3.Connection,
+    teams: Mapping[int, str],
+    players: Mapping[int, str],
+    matches: Mapping[int, Mapping[str, Any]],
+) -> None:
+    _insert_teams(connection, teams)
+    _insert_players(connection, players)
+    _insert_matches(connection, matches)
+
+
+def _insert_teams(connection: sqlite3.Connection, teams: Mapping[int, str]) -> None:
+    if not teams:
+        return
+    connection.executemany(
+        "INSERT OR REPLACE INTO teams (team_id, team_name) VALUES (?, ?)",
+        [(team_id, name) for team_id, name in teams.items()],
+    )
+
+
+def _insert_players(connection: sqlite3.Connection, players: Mapping[int, str]) -> None:
+    if not players:
+        return
+    connection.executemany(
+        "INSERT OR REPLACE INTO players (player_id, player_name) VALUES (?, ?)",
+        [(player_id, name) for player_id, name in players.items()],
+    )
+
+
+def _insert_matches(connection: sqlite3.Connection, matches: Mapping[int, Mapping[str, Any]]) -> None:
+    if not matches:
+        return
+
+    rows = [
+        (
+            match_id,
+            match.get("home_team_id"),
+            match.get("away_team_id"),
+            match.get("home_team_name"),
+            match.get("away_team_name"),
+            match.get("competition_name"),
+            match.get("season_name"),
+            match.get("match_date"),
+            match.get("venue"),
+            match.get("match_label"),
+        )
+        for match_id, match in matches.items()
+    ]
+
+    connection.executemany(
+        """
+        INSERT OR REPLACE INTO matches (
+            match_id,
+            home_team_id,
+            away_team_id,
+            home_team_name,
+            away_team_name,
+            competition_name,
+            season_name,
+            match_date,
+            venue,
+            match_label
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+
 def _insert_events(
     connection: sqlite3.Connection,
     events: Sequence[MutableEvent],
@@ -140,10 +369,75 @@ def _insert_events(
     )
 
 
+def _compute_shot_scoreboard(
+    events: Sequence[MutableEvent],
+    matches: Mapping[int, Mapping[str, Any]],
+    match_teams: Mapping[int, Set[int]],
+) -> Dict[str, Tuple[Optional[int], Optional[int]]]:
+    team_scores: Dict[int, Dict[int, int]] = {
+        match_id: {team_id: 0 for team_id in team_ids}
+        for match_id, team_ids in match_teams.items()
+    }
+    match_sides: Dict[int, Tuple[Optional[int], Optional[int]]] = {
+        match_id: (
+            _get_int(match_info.get("home_team_id")),
+            _get_int(match_info.get("away_team_id")),
+        )
+        for match_id, match_info in matches.items()
+    }
+
+    scorelines: Dict[str, Tuple[Optional[int], Optional[int]]] = {}
+
+    for event in events:
+        if not _is_shot_event(event):
+            continue
+
+        match_id = _get_int(event.get("match_id"))
+        if match_id is None:
+            continue
+
+        shot_id_value = event.get("id")
+        if not shot_id_value:
+            continue
+
+        shot_id = str(shot_id_value)
+        scores = team_scores.setdefault(match_id, {})
+
+        team_id = _get_nested_int(event, ("team", "id"))
+        if team_id is not None and team_id not in scores:
+            scores[team_id] = 0
+
+        outcome = _get_nested_str(event, ("shot", "outcome", "name"))
+        if outcome == "Goal" and team_id is not None:
+            scores[team_id] = scores.get(team_id, 0) + 1
+        elif outcome == "Own Goal":
+            opponent = _resolve_opponent_team(event, match_teams)
+            target = opponent if opponent is not None else team_id
+            if target is not None:
+                scores[target] = scores.get(target, 0) + 1
+
+        home_id, away_id = match_sides.get(match_id, (None, None))
+        if (home_id is None or away_id is None) and match_teams.get(match_id):
+            ordered = sorted(match_teams[match_id])
+            if home_id is None and ordered:
+                home_id = ordered[0]
+            if away_id is None and len(ordered) > 1:
+                away_id = ordered[1]
+            match_sides[match_id] = (home_id, away_id)
+
+        home_score = scores.get(home_id, 0) if home_id is not None else None
+        away_score = scores.get(away_id, 0) if away_id is not None else None
+
+        scorelines[shot_id] = (home_score, away_score)
+
+    return scorelines
+
+
 def _insert_shots_and_freeze_frames(
     connection: sqlite3.Connection,
     events: Sequence[MutableEvent],
     match_teams: Mapping[int, Set[int]],
+    scorelines: Mapping[str, Tuple[Optional[int], Optional[int]]],
 ) -> None:
     events_by_id = {str(event.get("id")): event for event in events if event.get("id")}
 
@@ -156,7 +450,7 @@ def _insert_shots_and_freeze_frames(
         if not _is_shot_event(event):
             continue
 
-        shot_row = _build_shot_row(event, events_by_id, match_teams)
+        shot_row = _build_shot_row(event, events_by_id, match_teams, scorelines)
         if shot_row:
             shot_rows.append(shot_row)
             freeze_frame_rows.extend(_build_freeze_frame_rows(event))
@@ -173,6 +467,7 @@ def _build_shot_row(
     event: MutableEvent,
     events_by_id: Mapping[str, MutableEvent],
     match_teams: Mapping[int, Set[int]],
+    scorelines: Mapping[str, Tuple[Optional[int], Optional[int]]],
 ) -> Optional[Tuple[Any, ...]]:
     shot = event.get("shot")
     if not isinstance(shot, Mapping):
@@ -194,6 +489,7 @@ def _build_shot_row(
 
     freeze_frame_entries = shot.get("freeze_frame")
     freeze_frame_count = _freeze_frame_count(freeze_frame_entries)
+    score_home, score_away = scorelines.get(shot_id, (None, None))
 
     return (
         shot_id,
@@ -237,6 +533,9 @@ def _build_shot_row(
         _bool_to_int(outcome == "Own Goal"),
         _bool_to_int(freeze_frame_count > 0),
         freeze_frame_count,
+        _bool_to_int(outcome == "Goal"),
+        score_home,
+        score_away,
     )
 
 
