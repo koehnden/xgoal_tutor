@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional,
 from xgoal_tutor.etl.schema import CREATE_INDEX_STATEMENTS, CREATE_TABLE_STATEMENTS, SHOT_COLUMNS
 
 MutableEvent = MutableMapping[str, Any]
+LineupRow = Dict[str, Any]
 
 
 def load_match_events(
@@ -23,7 +24,9 @@ def load_match_events(
                 event["match_id"] = match_id_override
 
     match_teams = _derive_match_teams(events)
-    teams, players, matches = _collect_reference_data(events, match_teams)
+    match_id = _determine_match_id(events)
+    lineups = _read_match_lineups(events_path, match_id)
+    teams, players, matches = _collect_reference_data(events, match_teams, lineups)
 
     if connection is None:
         with sqlite3.connect(db_path) as owned_connection:
@@ -34,10 +37,11 @@ def load_match_events(
                 teams,
                 players,
                 matches,
+                lineups,
             )
             owned_connection.commit()
     else:
-        _load_into_connection(connection, events, match_teams, teams, players, matches)
+        _load_into_connection(connection, events, match_teams, teams, players, matches, lineups)
 
 
 def _load_into_connection(
@@ -47,6 +51,7 @@ def _load_into_connection(
     teams: Mapping[int, str],
     players: Mapping[int, str],
     matches: Mapping[int, Mapping[str, Any]],
+    lineups: Sequence[LineupRow],
 ) -> None:
     connection.row_factory = sqlite3.Row
     _initialise_schema(connection)
@@ -54,6 +59,7 @@ def _load_into_connection(
     _insert_events(connection, events, match_teams)
     scorelines = _compute_shot_scoreboard(events, matches, match_teams)
     _insert_shots_and_freeze_frames(connection, events, match_teams, scorelines)
+    _insert_match_lineups(connection, lineups)
 
 
 def _read_event_file(events_path: Path) -> List[MutableEvent]:
@@ -96,6 +102,14 @@ def _derive_match_id_from_path(events_path: Path) -> Optional[int]:
     return hashed
 
 
+def _determine_match_id(events: Sequence[MutableEvent]) -> Optional[int]:
+    for event in events:
+        match_id = _get_int(event.get("match_id"))
+        if match_id is not None:
+            return match_id
+    return None
+
+
 def _initialise_schema(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA foreign_keys = ON;")
 
@@ -107,7 +121,9 @@ def _initialise_schema(connection: sqlite3.Connection) -> None:
 
 
 def _collect_reference_data(
-    events: Sequence[MutableEvent], match_teams: Mapping[int, Set[int]]
+    events: Sequence[MutableEvent],
+    match_teams: Mapping[int, Set[int]],
+    lineups: Sequence[LineupRow],
 ) -> Tuple[Dict[int, str], Dict[int, str], Dict[int, Dict[str, Any]]]:
     teams: Dict[int, str] = {}
     players: Dict[int, str] = {}
@@ -200,6 +216,17 @@ def _collect_reference_data(
                     match_record["_team_names"][team_id] = team_name
 
     _finalise_match_info(matches, match_teams, teams)
+
+    for lineup in lineups:
+        team_id = _get_int(lineup.get("team_id"))
+        team_name = _get_str(lineup.get("team_name"))
+        if team_id is not None and team_name:
+            teams.setdefault(team_id, team_name)
+
+        player_id = _get_int(lineup.get("player_id"))
+        player_name = _get_str(lineup.get("player_name"))
+        if player_id is not None and player_name:
+            players.setdefault(player_id, player_name)
 
     return teams, players, matches
 
@@ -367,6 +394,263 @@ def _insert_events(
         """,
         event_rows,
     )
+
+
+def _insert_match_lineups(connection: sqlite3.Connection, lineups: Sequence[LineupRow]) -> None:
+    if not lineups:
+        return
+
+    rows = [
+        (
+            lineup.get("match_id"),
+            lineup.get("team_id"),
+            lineup.get("player_id"),
+            lineup.get("player_name"),
+            lineup.get("jersey_number"),
+            lineup.get("position_name"),
+            lineup.get("position_id"),
+            lineup.get("is_starter"),
+            lineup.get("sort_order"),
+            lineup.get("from_period"),
+            lineup.get("to_period"),
+            lineup.get("from_minute"),
+            lineup.get("to_minute"),
+            lineup.get("raw_json"),
+        )
+        for lineup in lineups
+    ]
+
+    connection.executemany(
+        """
+        INSERT OR REPLACE INTO match_lineups (
+            match_id,
+            team_id,
+            player_id,
+            player_name,
+            jersey_number,
+            position_name,
+            position_id,
+            is_starter,
+            sort_order,
+            from_period,
+            to_period,
+            from_minute,
+            to_minute,
+            raw_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+
+
+def _read_match_lineups(events_path: Path, match_id: Optional[int]) -> List[LineupRow]:
+    if match_id is None:
+        return []
+
+    lineup_path = _find_lineup_file(events_path)
+    if lineup_path is None:
+        return []
+
+    try:
+        raw = lineup_path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+
+    if not isinstance(data, Sequence):
+        return []
+
+    return _normalise_lineup_data(data, match_id)
+
+
+def _find_lineup_file(events_path: Path) -> Optional[Path]:
+    seen: Set[Path] = set()
+    for candidate in _candidate_lineup_paths(events_path):
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _candidate_lineup_paths(events_path: Path) -> List[Path]:
+    candidates: List[Path] = []
+    suffix = events_path.suffix
+    stem = events_path.stem
+
+    if suffix:
+        candidates.append(events_path.with_name(f"{stem}_lineups{suffix}"))
+        if stem.startswith("events_"):
+            candidates.append(events_path.with_name(f"lineups_{stem[len('events_') :]}{suffix}"))
+
+    parts = list(events_path.parts)
+    for idx, part in enumerate(parts[:-1]):
+        if part == "events":
+            new_parts = list(parts)
+            new_parts[idx] = "lineups"
+            candidates.append(Path(*new_parts))
+
+    return candidates
+
+
+def _normalise_lineup_data(data: Sequence[Any], match_id: int) -> List[LineupRow]:
+    normalised: List[LineupRow] = []
+
+    for team_entry in data:
+        if not isinstance(team_entry, Mapping):
+            continue
+
+        team_id = _get_int(team_entry.get("team_id"))
+        if team_id is None:
+            team_id = _get_nested_int(team_entry, ("team", "id"))
+        if team_id is None:
+            continue
+
+        team_name = _get_str(team_entry.get("team_name"))
+        if not team_name:
+            team_name = _get_nested_str(team_entry, ("team", "name"))
+
+        lineup_entries = team_entry.get("lineup")
+        if not isinstance(lineup_entries, Sequence):
+            continue
+
+        starter_index = 0
+
+        for entry in lineup_entries:
+            if not isinstance(entry, Mapping):
+                continue
+
+            player_id = _get_int(entry.get("player_id"))
+            if player_id is None:
+                player_id = _get_nested_int(entry, ("player", "id"))
+
+            player_name = _get_str(entry.get("player_name"))
+            if not player_name:
+                player_name = _get_nested_str(entry, ("player", "name"))
+
+            if player_id is None or not player_name:
+                continue
+
+            jersey_number = _get_int(entry.get("jersey_number"))
+            if jersey_number is None:
+                jersey_number = _get_int(entry.get("shirt_number"))
+            if jersey_number is None:
+                jersey_number = _get_nested_int(entry, ("player", "jersey_number"))
+
+            position_info = _extract_primary_position(entry)
+
+            position_name = None
+            position_id = None
+            from_period = None
+            to_period = None
+            from_minute = None
+            to_minute = None
+            is_starter: Optional[int] = None
+
+            if position_info is not None:
+                position_name = _get_str(position_info.get("position")) or _get_str(
+                    position_info.get("name")
+                )
+                position_id = _get_int(position_info.get("position_id"))
+                if position_id is None:
+                    position_id = _get_int(position_info.get("id"))
+
+                from_period = _get_int(position_info.get("from_period"))
+                to_period = _get_int(position_info.get("to_period"))
+                from_minute = _parse_time_to_minute(position_info.get("from"))
+                to_minute = _parse_time_to_minute(position_info.get("to"))
+
+                start_reason = _get_str(position_info.get("start_reason"))
+                if start_reason is not None:
+                    is_starter = 1 if start_reason.lower() == "starting xi" else 0
+
+            if is_starter is None:
+                start_reason = _get_str(entry.get("start_reason"))
+                if start_reason is not None:
+                    is_starter = 1 if start_reason.lower() == "starting xi" else 0
+
+            if is_starter is None and from_minute is not None:
+                is_starter = 1 if from_minute == 0 else 0
+
+            sort_order = None
+            if is_starter == 1:
+                starter_index += 1
+                sort_order = starter_index
+
+            raw_json = json.dumps(entry)
+
+            normalised.append(
+                {
+                    "match_id": match_id,
+                    "team_id": team_id,
+                    "team_name": team_name,
+                    "player_id": player_id,
+                    "player_name": player_name,
+                    "jersey_number": jersey_number,
+                    "position_name": position_name,
+                    "position_id": position_id,
+                    "is_starter": is_starter,
+                    "sort_order": sort_order,
+                    "from_period": from_period,
+                    "to_period": to_period,
+                    "from_minute": from_minute,
+                    "to_minute": to_minute,
+                    "raw_json": raw_json,
+                }
+            )
+
+    return normalised
+
+
+def _extract_primary_position(entry: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
+    positions = entry.get("positions")
+    if isinstance(positions, Sequence):
+        for position in positions:
+            if isinstance(position, Mapping):
+                return position
+
+    position = entry.get("position")
+    if isinstance(position, Mapping):
+        return position
+
+    return None
+
+
+def _parse_time_to_minute(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+
+    if isinstance(value, (int, float)):
+        return int(float(value))
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+
+        parts = text.split(":")
+        try:
+            if len(parts) == 3:
+                hours = float(parts[0])
+                minutes = float(parts[1])
+                seconds = float(parts[2])
+                total_minutes = hours * 60 + minutes + seconds / 60.0
+            elif len(parts) == 2:
+                minutes = float(parts[0])
+                seconds = float(parts[1])
+                total_minutes = minutes + seconds / 60.0
+            else:
+                total_minutes = float(text)
+            return int(total_minutes)
+        except ValueError:
+            return None
+
+    return None
 
 
 def _compute_shot_scoreboard(
