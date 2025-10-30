@@ -49,6 +49,27 @@ CREATE_TABLE_STATEMENTS = (
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS match_lineups (
+        lineup_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        match_id         INTEGER NOT NULL,
+        team_id          INTEGER NOT NULL,
+        player_id        INTEGER NOT NULL,
+        player_name      TEXT NOT NULL,
+        jersey_number    INTEGER,
+        position_name    TEXT,
+        position_id      INTEGER,
+        is_starter       INTEGER,
+        sort_order       INTEGER,
+        from_period      INTEGER,
+        to_period        INTEGER,
+        from_minute      INTEGER,
+        to_minute        INTEGER,
+        raw_json         TEXT,
+        UNIQUE (match_id, team_id, player_id),
+        FOREIGN KEY (match_id) REFERENCES matches(match_id) ON DELETE CASCADE
+    );
+    """,
+    """
     CREATE TABLE IF NOT EXISTS shots (
         shot_id TEXT PRIMARY KEY,
         match_id INTEGER,
@@ -147,6 +168,12 @@ CREATE_TABLE_STATEMENTS = (
 CREATE_INDEX_STATEMENTS = (
     """
     CREATE INDEX IF NOT EXISTS idx_events_match ON events(match_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_lineups_match ON match_lineups(match_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_lineups_match_team ON match_lineups(match_id, team_id);
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_shots_match ON shots(match_id);

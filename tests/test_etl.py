@@ -11,6 +11,11 @@ from xgoal_tutor import etl
 
 @pytest.fixture()
 def sample_events(tmp_path: Path) -> Path:
+    events_dir = tmp_path / "events"
+    lineups_dir = tmp_path / "lineups"
+    events_dir.mkdir()
+    lineups_dir.mkdir()
+
     events = [
         {
             "id": "pass-1",
@@ -120,8 +125,105 @@ def sample_events(tmp_path: Path) -> Path:
             },
         },
     ]
-    path = tmp_path / "events.json"
+    path = events_dir / "match.json"
     path.write_text(json.dumps(events), encoding="utf-8")
+
+    lineups = [
+        {
+            "team_id": 100,
+            "team_name": "Team A",
+            "lineup": [
+                {
+                    "player_id": 10,
+                    "player_name": "Playmaker",
+                    "jersey_number": 8,
+                    "positions": [
+                        {
+                            "position_id": 8,
+                            "position": "Central Midfield",
+                            "from": "00:00",
+                            "to": "60:00",
+                            "from_period": 1,
+                            "to_period": 2,
+                            "start_reason": "Starting XI",
+                        }
+                    ],
+                },
+                {
+                    "player_id": 9,
+                    "player_name": "Striker",
+                    "jersey_number": 9,
+                    "positions": [
+                        {
+                            "position_id": 9,
+                            "position": "Striker",
+                            "from": "00:00",
+                            "to": "90:00",
+                            "from_period": 1,
+                            "to_period": 2,
+                            "start_reason": "Starting XI",
+                        }
+                    ],
+                },
+                {
+                    "player_id": 20,
+                    "player_name": "Impact Sub",
+                    "jersey_number": 20,
+                    "positions": [
+                        {
+                            "position_id": 15,
+                            "position": "Winger",
+                            "from": "60:00",
+                            "to": "90:00",
+                            "from_period": 2,
+                            "to_period": 2,
+                            "start_reason": "Substitution",
+                        }
+                    ],
+                },
+            ],
+        },
+        {
+            "team_id": 200,
+            "team_name": "Team B",
+            "lineup": [
+                {
+                    "player_id": 30,
+                    "player_name": "Goalkeeper",
+                    "jersey_number": 1,
+                    "positions": [
+                        {
+                            "position_id": 1,
+                            "position": "Goalkeeper",
+                            "from": "00:00",
+                            "to": "90:00",
+                            "from_period": 1,
+                            "to_period": 2,
+                            "start_reason": "Starting XI",
+                        }
+                    ],
+                },
+                {
+                    "player_id": 40,
+                    "player_name": "Defender",
+                    "jersey_number": 5,
+                    "positions": [
+                        {
+                            "position_id": 2,
+                            "position": "Centre Back",
+                            "from": "00:00",
+                            "to": "90:00",
+                            "from_period": 1,
+                            "to_period": 2,
+                            "start_reason": "Starting XI",
+                        }
+                    ],
+                },
+            ],
+        },
+    ]
+
+    (lineups_dir / "match.json").write_text(json.dumps(lineups), encoding="utf-8")
     return path
 
 
@@ -143,7 +245,7 @@ def test_load_match_events_populates_sqlite(sample_events: Path, tmp_path: Path)
         ]
 
         players = conn.execute("SELECT COUNT(*) AS cnt FROM players").fetchone()
-        assert players["cnt"] == 5
+        assert players["cnt"] == 7
 
         match = conn.execute(
             "SELECT * FROM matches WHERE match_id = ?",
@@ -198,6 +300,32 @@ def test_load_match_events_populates_sqlite(sample_events: Path, tmp_path: Path)
             "SELECT raw_json FROM events WHERE event_id = ?", ("shot-1",)
         ).fetchone()
         assert stored_event is not None
+
+        lineups = conn.execute(
+            """
+            SELECT player_id, team_id, is_starter, sort_order, from_period, from_minute, raw_json
+            FROM match_lineups
+            ORDER BY team_id, sort_order IS NULL, sort_order, player_id
+            """
+        ).fetchall()
+
+        assert len(lineups) == 5
+
+        starters = [row for row in lineups if row["is_starter"] == 1]
+        assert [(row["team_id"], row["player_id"], row["sort_order"]) for row in starters] == [
+            (100, 10, 1),
+            (100, 9, 2),
+            (200, 30, 1),
+            (200, 40, 2),
+        ]
+
+        subs = [row for row in lineups if row["is_starter"] == 0]
+        assert len(subs) == 1
+        sub = subs[0]
+        assert sub["player_id"] == 20
+        assert sub["from_period"] == 2
+        assert sub["from_minute"] == 60
+        assert sub["raw_json"] is not None
         raw_event = json.loads(stored_event["raw_json"])
         assert raw_event["id"] == "shot-1"
 
