@@ -1,409 +1,81 @@
 openapi: 3.0.3
 info:
   title: xGoal Inference Service
-  version: 1.2.0
+  version: 1.0.0
   description: |
-    REST API for xGoal (xG) predictions and natural-language explanations.
-    v1.2.0 adds match lineups and insights endpoints to support a Streamlit match overview,
-    player drilldowns, and cached LLM-generated summaries.
-
+    FastAPI service exposing xGoal logistic regression inference endpoints.
 servers:
   - url: http://localhost:8000
 
 tags:
-  - name: System
-  - name: Matches
-  - name: Shots
-  - name: Explanations
-  - name: Predictions
-  - name: Models
+  - name: matches
+    description: Match discovery and summaries
+  - name: inference
+    description: xG predictions and LLM explanations
+  - name: shots
+    description: Shot retrieval
 
 paths:
-  /health:
-    get:
-      tags: [System]
-      summary: Health probe
-      responses:
-        '200':
-          description: Service is healthy
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: ok
-
   /matches:
     get:
-      tags: [Matches]
-      summary: List matches (human-readable labels)
-      description: Returns matches with home/away team names and a preformatted label for UI dropdowns.
-      parameters:
-        - in: query
-          name: q
-          schema: { type: string }
-          description: Full-text search across team names/labels.
-        - in: query
-          name: season
-          schema: { type: string }
-        - in: query
-          name: competition
-          schema: { type: string }
-        - in: query
-          name: date_from
-          schema: { type: string, format: date }
-        - in: query
-          name: date_to
-          schema: { type: string, format: date }
-        - $ref: '#/components/parameters/page'
-        - $ref: '#/components/parameters/page_size'
+      tags: [matches]
+      summary: List matches available to the tutor UI
+      operationId: listMatches
       responses:
-        '200':
-          description: Paginated matches
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MatchList'
-        '400': { $ref: '#/components/responses/BadRequest' }
-
-  /matches/{match_id}:
-    get:
-      tags: [Matches]
-      summary: Get match by id
-      parameters:
-        - $ref: '#/components/parameters/match_id'
-      responses:
-        '200':
-          description: Match
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Match'
-        '404': { $ref: '#/components/responses/NotFound' }
+        '501':
+          description: Listing matches is not yet implemented
 
   /matches/{match_id}/lineups:
     get:
-      tags: [Matches]
-      summary: Get home/away lineups for a match
+      tags: [matches]
+      summary: Get starting lineups for a match
+      operationId: getMatchLineups
       parameters:
-        - $ref: '#/components/parameters/match_id'
+        - name: match_id
+          in: path
+          required: true
+          schema: { type: string }
       responses:
-        '200':
-          description: Lineups for both teams (starters and bench)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MatchLineups'
-        '404': { $ref: '#/components/responses/NotFound' }
+        '501':
+          description: Match lineup retrieval is not yet implemented
 
   /matches/{match_id}/summary:
-    get:
-      tags: [Matches]
-      summary: Match overview and per-team insights
-      description: |
-        Returns the full-time result and per-team insights derived from shot explanations and model outputs:
-        positives, improvements, best/improve players, with evidence shot ids.
-      parameters:
-        - $ref: '#/components/parameters/match_id'
-        - in: query
-          name: refresh
-          schema: { type: boolean, default: false }
-          description: Recompute on the fly; otherwise return cached if available.
-      responses:
-        '200':
-          description: Match insights
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MatchSummary'
-        '404': { $ref: '#/components/responses/NotFound' }
     post:
-      tags: [Matches]
-      summary: (Re)generate and cache match summary using LLM
+      tags: [matches]
+      summary: Generate a tactical summary for a match
+      operationId: generateMatchSummary
       parameters:
-        - $ref: '#/components/parameters/match_id'
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreateMatchSummaryRequest'
+        - name: match_id
+          in: path
+          required: true
+          schema: { type: string }
       responses:
-        '201':
-          description: Created/updated summary
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MatchSummary'
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '502': { $ref: '#/components/responses/BadGateway' }
-
-  /matches/{match_id}/players:
-    get:
-      tags: [Matches]
-      summary: List players for a match (with lineup role)
-      parameters:
-        - $ref: '#/components/parameters/match_id'
-        - in: query
-          name: side
-          schema:
-            type: string
-            enum: [home, away]
-          description: Filter to one side.
-      responses:
-        '200':
-          description: Players in the match
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/MatchPlayers'
-        '404': { $ref: '#/components/responses/NotFound' }
-
-  /matches/{match_id}/players/{player_id}/shots:
-    get:
-      tags: [Shots]
-      summary: Shots in which the player was involved in this match
-      description: Involvement = acting shooter OR appears in freeze-frame (defender/GK/teammate) at the moment of shot.
-      parameters:
-        - $ref: '#/components/parameters/match_id'
-        - $ref: '#/components/parameters/player_id'
-        - in: query
-          name: role
-          schema:
-            type: string
-            enum: [any, attacker, defender, goalkeeper, teammate]
-            default: any
-        - in: query
-          name: include
-          schema:
-            type: string
-            enum: [explanation,model_prediction,positions]
-            example: explanation,model_prediction
-          style: form
-          explode: false
-      responses:
-        '200':
-          description: Player-involved shots
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ShotList'
-        '404': { $ref: '#/components/responses/NotFound' }
+        '501':
+          description: Match summary generation is not yet implemented
 
   /matches/{match_id}/players/{player_id}/summary:
-    get:
-      tags: [Matches]
-      summary: Player summary for this match (strengths & improvements)
-      parameters:
-        - $ref: '#/components/parameters/match_id'
-        - $ref: '#/components/parameters/player_id'
-        - in: query
-          name: refresh
-          schema: { type: boolean, default: false }
-      responses:
-        '200':
-          description: Player summary
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PlayerMatchSummary'
-        '404': { $ref: '#/components/responses/NotFound' }
     post:
-      tags: [Matches]
-      summary: (Re)generate and cache player match summary using LLM
+      tags: [matches]
+      summary: Generate a tactical summary for a player within a match
+      operationId: generateMatchPlayerSummary
       parameters:
-        - $ref: '#/components/parameters/match_id'
-        - $ref: '#/components/parameters/player_id'
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreatePlayerMatchSummaryRequest'
+        - name: match_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: player_id
+          in: path
+          required: true
+          schema: { type: string }
       responses:
-        '201':
-          description: Created/updated player summary
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PlayerMatchSummary'
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '502': { $ref: '#/components/responses/BadGateway' }
+        '501':
+          description: Match player summary generation is not yet implemented
 
-  /matches/{match_id}/shots:
-    get:
-      tags: [Shots]
-      summary: List shots for a match (meta only by default)
-      description: |
-        Returns shot metadata for the selected match (minute, player, team, outcome, scoreline, StatsBomb xG).
-        To include cached model prediction and/or latest explanation and/or freeze-frame positions,
-        pass the `include` query param (comma-separated).
-      parameters:
-        - $ref: '#/components/parameters/match_id'
-        - in: query
-          name: goals_only
-          schema: { type: boolean, default: false }
-        - in: query
-          name: include
-          schema:
-            type: string
-            description: Comma-separated includes
-            example: model_prediction,explanation
-            enum: [model_prediction,explanation,positions]
-          style: form
-          explode: false
-        - in: query
-          name: sort
-          schema:
-            type: string
-            description: Sort order; default chronological
-            example: minute,second
-        - $ref: '#/components/parameters/page'
-        - $ref: '#/components/parameters/page_size'
-      responses:
-        '200':
-          description: Shots for match
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ShotList'
-        '404': { $ref: '#/components/responses/NotFound' }
-
-  /shots/{shot_id}:
-    get:
-      tags: [Shots]
-      summary: Get shot detail (meta + optional positions/prediction/explanation)
-      parameters:
-        - $ref: '#/components/parameters/shot_id'
-        - in: query
-          name: include
-          schema:
-            type: string
-            description: Comma-separated includes
-            example: positions,model_prediction,explanation
-            enum: [model_prediction,explanation,positions]
-          style: form
-          explode: false
-      responses:
-        '200':
-          description: Shot detail
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ShotDetail'
-        '404': { $ref: '#/components/responses/NotFound' }
-
-  /shots/{shot_id}/positions:
-    get:
-      tags: [Shots]
-      summary: Freeze-frame positions for a shot
-      parameters:
-        - $ref: '#/components/parameters/shot_id'
-      responses:
-        '200':
-          description: Player positions in StatsBomb coordinates
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/FreezeFrame'
-        '404': { $ref: '#/components/responses/NotFound' }
-
-  /shots/{shot_id}/explanations:
-    get:
-      tags: [Explanations]
-      summary: List explanations for a shot (latest first)
-      parameters:
-        - $ref: '#/components/parameters/shot_id'
-        - $ref: '#/components/parameters/page'
-        - $ref: '#/components/parameters/page_size'
-      responses:
-        '200':
-          description: Explanations list
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ExplanationList'
-        '404': { $ref: '#/components/responses/NotFound' }
-    post:
-      tags: [Explanations]
-      summary: Generate or store an explanation for a shot
-      description: Generates a fresh explanation using the selected LLM (or stores a provided one).
-      parameters:
-        - $ref: '#/components/parameters/shot_id'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreateExplanationRequest'
-      responses:
-        '201':
-          description: Created explanation
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Explanation'
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '502':
-          description: Failed to retrieve a response from the LLM provider
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /predictions/shots:
-    post:
-      tags: [Predictions]
-      summary: Predict xG (and optionally per-shot explanations) for one or more shots
-      description: |
-        Forward-compatible replacement for legacy endpoints. You may supply features inline
-        or reference known `shot_id`s to let the server fetch features.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ShotPredictionBatchRequest'
-      responses:
-        '200':
-          description: Per-shot predictions (and optional explanations)
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ShotPredictionBatchResponse'
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '502':
-          description: Failed to retrieve a response from the LLM provider
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /models/llm:
-    get:
-      tags: [Models]
-      summary: List available LLM models
-      responses:
-        '200':
-          description: Available models
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  items:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/LlmModel'
-
-  # --- Legacy (kept for compatibility; prefer /predictions/shots) ---
   /predict_shots:
     post:
-      deprecated: true
-      tags: [Predictions]
-      summary: Predict xG and explanations using the managed prompt (legacy)
+      tags: [inference]
+      summary: Predict xG and explanation using the managed prompt
+      operationId: predictShots
       requestBody:
         required: true
         content:
@@ -412,19 +84,21 @@ paths:
               $ref: '#/components/schemas/ShotPredictionRequest'
       responses:
         '200':
-          description: Successful response containing predictions and explanation
+          description: Predictions and explanation
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ShotPredictionResponseLegacy'
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '502': { $ref: '#/components/responses/BadGateway' }
+                $ref: '#/components/schemas/ShotPredictionResponse'
+        '400':
+          description: At least one shot must be provided
+        '502':
+          description: Failed to retrieve a response from the LLM
 
   /predict_shots_with_prompt:
     post:
-      deprecated: true
-      tags: [Predictions]
-      summary: Predict xG and explanations with a custom prompt override (legacy)
+      tags: [inference]
+      summary: Predict xG and explanation with a custom prompt override
+      operationId: predictShotsWithPrompt
       requestBody:
         required: true
         content:
@@ -433,467 +107,66 @@ paths:
               $ref: '#/components/schemas/ShotPredictionWithPromptRequest'
       responses:
         '200':
-          description: Successful response containing predictions and explanation
+          description: Predictions and explanation
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ShotPredictionResponseLegacy'
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '502': { $ref: '#/components/responses/BadGateway' }
+                $ref: '#/components/schemas/ShotPredictionResponse'
+        '400':
+          description: At least one shot must be provided
+        '502':
+          description: Failed to retrieve a response from the LLM
+
+  /match/{match_id}/shots:
+    get:
+      tags: [matches]
+      summary: Get cached shot predictions for a match
+      operationId: getMatchShots
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Cached predictions for the match
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShotPredictionResponse'
+        '404':
+          description: No cached predictions for match
+
+  /shots/{shot_id}:
+    get:
+      tags: [shots]
+      summary: Get full detail for a specific shot
+      operationId: getShotDetail
+      parameters:
+        - name: shot_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '501':
+          description: Shot detail retrieval is not yet implemented
 
 components:
-  parameters:
-    match_id:
-      name: match_id
-      in: path
-      required: true
-      schema: { type: string }
-      description: Identifier of the match
-    shot_id:
-      name: shot_id
-      in: path
-      required: true
-      schema: { type: string }
-      description: Identifier of the shot
-    player_id:
-      name: player_id
-      in: path
-      required: true
-      schema: { type: string }
-      description: Identifier of the player
-    page:
-      name: page
-      in: query
-      schema: { type: integer, minimum: 1, default: 1 }
-    page_size:
-      name: page_size
-      in: query
-      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
-
-  responses:
-    BadRequest:
-      description: Invalid request
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/ErrorResponse' }
-    NotFound:
-      description: Resource not found
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/ErrorResponse' }
-    BadGateway:
-      description: Upstream model error
-      content:
-        application/json:
-          schema: { $ref: '#/components/schemas/ErrorResponse' }
-
   schemas:
-    # --- Core domain ---
-    Team:
-      type: object
-      properties:
-        id: { type: string }
-        name: { type: string }
-        short_name: { type: string, nullable: true }
-
-    Player:
-      type: object
-      properties:
-        id: { type: string }
-        name: { type: string }
-        jersey_number: { type: integer, nullable: true }
-        team_id: { type: string, nullable: true }
-        position: { type: string, nullable: true }
-
-    Match:
-      type: object
-      required: [id, home_team, away_team, kickoff_utc, label]
-      properties:
-        id: { type: string }
-        competition: { type: string, nullable: true }
-        season: { type: string, nullable: true }
-        kickoff_utc: { type: string, format: date-time }
-        home_team: { $ref: '#/components/schemas/Team' }
-        away_team: { $ref: '#/components/schemas/Team' }
-        venue: { type: string, nullable: true }
-        label:
-          type: string
-          description: Human-readable label like "FC Bayern – Liverpool"
-
-    MatchList:
-      type: object
-      properties:
-        items:
-          type: array
-          items: { $ref: '#/components/schemas/Match' }
-        page: { type: integer }
-        page_size: { type: integer }
-        total: { type: integer }
-
-    # --- Lineups / Match insights ---
-    LineupPlayer:
-      type: object
-      properties:
-        player: { $ref: '#/components/schemas/Player' }
-        is_starter: { type: boolean }
-        jersey_number: { type: integer, nullable: true }
-        position_name: { type: string, nullable: true }
-        sort_order: { type: integer, nullable: true }
-
-    LineupTeam:
-      type: object
-      properties:
-        team: { $ref: '#/components/schemas/Team' }
-        starters:
-          type: array
-          items: { $ref: '#/components/schemas/LineupPlayer' }
-        bench:
-          type: array
-          items: { $ref: '#/components/schemas/LineupPlayer' }
-
-    MatchLineups:
-      type: object
-      properties:
-        home: { $ref: '#/components/schemas/LineupTeam' }
-        away: { $ref: '#/components/schemas/LineupTeam' }
-
-    MatchResult:
-      type: object
-      properties:
-        home_team: { $ref: '#/components/schemas/Team' }
-        away_team: { $ref: '#/components/schemas/Team' }
-        score_home: { type: integer }
-        score_away: { type: integer }
-        final: { type: boolean, default: true }
-        period_breakdown:
-          type: array
-          items:
-            type: object
-            properties:
-              period: { type: integer }
-              score_home: { type: integer }
-              score_away: { type: integer }
-
-    InsightItem:
-      type: object
-      properties:
-        text: { type: string }
-        evidence_shot_ids:
-          type: array
-          items: { type: string }
-
-    PlayerHighlight:
-      type: object
-      properties:
-        player: { $ref: '#/components/schemas/Player' }
-        rationale: { type: string }
-        evidence_shot_ids:
-          type: array
-          items: { type: string }
-
-    TeamInsights:
-      type: object
-      properties:
-        team: { $ref: '#/components/schemas/Team' }
-        positives:
-          type: array
-          items: { $ref: '#/components/schemas/InsightItem' }
-        improvements:
-          type: array
-          items: { $ref: '#/components/schemas/InsightItem' }
-        best_player: { $ref: '#/components/schemas/PlayerHighlight' }
-        improve_player: { $ref: '#/components/schemas/PlayerHighlight' }
-
-    MatchSummary:
-      type: object
-      properties:
-        result: { $ref: '#/components/schemas/MatchResult' }
-        home_insights: { $ref: '#/components/schemas/TeamInsights' }
-        away_insights: { $ref: '#/components/schemas/TeamInsights' }
-        generated_at: { type: string, format: date-time }
-        llm_model: { type: string, nullable: true }
-
-    CreateMatchSummaryRequest:
-      type: object
-      properties:
-        generate:
-          type: boolean
-          default: true
-        llm_model:
-          type: string
-          nullable: true
-        prompt_override:
-          type: string
-          nullable: true
-
-    MatchPlayers:
-      type: object
-      properties:
-        items:
-          type: array
-          items:
-            type: object
-            properties:
-              player: { $ref: '#/components/schemas/Player' }
-              team: { $ref: '#/components/schemas/Team' }
-              is_starter: { type: boolean, nullable: true }
-              jersey_number: { type: integer, nullable: true }
-              position_name: { type: string, nullable: true }
-
-    PlayerMatchSummary:
-      type: object
-      properties:
-        player: { $ref: '#/components/schemas/Player' }
-        team: { $ref: '#/components/schemas/Team' }
-        positives:
-          type: array
-          items: { $ref: '#/components/schemas/InsightItem' }
-        improvements:
-          type: array
-          items: { $ref: '#/components/schemas/InsightItem' }
-        generated_at: { type: string, format: date-time }
-        llm_model: { type: string, nullable: true }
-
-    CreatePlayerMatchSummaryRequest:
-      type: object
-      properties:
-        generate:
-          type: boolean
-          default: true
-        llm_model:
-          type: string
-          nullable: true
-        prompt_override:
-          type: string
-          nullable: true
-
-    # --- Shots / positions / explanations ---
-    ShotMeta:
-      type: object
-      description: Minimal fields for list/drill-down views
-      required: [id, match_id, team, player, minute, second, is_goal, xg_statsbomb]
-      properties:
-        id: { type: string }
-        match_id: { type: string }
-        period: { type: integer, description: '1..2..' }
-        minute: { type: integer }
-        second: { type: integer }
-        clock:
-          type: string
-          example: "73:12"
-        team: { $ref: '#/components/schemas/Team' }
-        player: { $ref: '#/components/schemas/Player' }
-        is_goal: { type: boolean }
-        outcome:
-          type: string
-          nullable: true
-          description: Outcome detail if available
-          example: saved
-        xg_statsbomb:
-          type: number
-          format: float
-        shot_type: { type: string, nullable: true }
-        body_part: { type: string, nullable: true }
-        play_pattern: { type: string, nullable: true }
-        score_home: { type: integer, nullable: true }
-        score_away: { type: integer, nullable: true }
-        freeze_frame_available: { type: boolean, nullable: true }
-        model_prediction:
-          $ref: '#/components/schemas/ModelPrediction'
-        latest_explanation:
-          $ref: '#/components/schemas/Explanation'
-
-    ShotDetail:
-      type: object
-      description: Full details for a shot
-      required: [meta]
-      properties:
-        meta:
-          $ref: '#/components/schemas/ShotMeta'
-        positions:
-          $ref: '#/components/schemas/FreezeFrame'
-        model_prediction:
-          $ref: '#/components/schemas/ModelPrediction'
-        latest_explanation:
-          $ref: '#/components/schemas/Explanation'
-
-    ShotList:
-      type: object
-      properties:
-        items:
-          type: array
-          items: { $ref: '#/components/schemas/ShotMeta' }
-        page: { type: integer }
-        page_size: { type: integer }
-        total: { type: integer }
-
-    FreezeFrame:
-      type: object
-      description: Player positions in StatsBomb coordinates (x:0..120, y:0..80), origin top-left.
-      properties:
-        coordinate_system:
-          type: string
-          example: statsbomb_120x80_top_left
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/FreezeFramePlayer'
-
-    FreezeFramePlayer:
-      type: object
-      required: [player, team_id, role, x, y]
-      properties:
-        player: { $ref: '#/components/schemas/Player' }
-        team_id: { type: string }
-        side:
-          type: string
-          enum: [home, away]
-        role:
-          type: string
-          enum: [attacker, defender, goalkeeper]
-        is_actor:
-          type: boolean
-          description: True for the shooting player
-        x:
-          type: number
-          format: float
-          description: '0..120 (StatsBomb)'
-        y:
-          type: number
-          format: float
-          description: '0..80 (StatsBomb)'
-
-    # --- Predictions & explanations ---
-    ModelPrediction:
-      type: object
-      required: [xg]
-      properties:
-        xg:
-          type: number
-          format: float
-          description: Model predicted probability (0..1)
-        reason_codes:
-          type: array
-          items: { $ref: '#/components/schemas/ReasonCode' }
-        computed_at:
-          type: string
-          format: date-time
-        llm_model:
-          type: string
-          nullable: true
-          description: LLM used if an explanation was generated inline
-        explanation:
-          type: string
-          nullable: true
-          description: Optional per-shot explanation generated alongside prediction
-
-    Explanation:
-      type: object
-      required: [shot_id, text, created_at]
-      properties:
-        id: { type: string, nullable: true }
-        shot_id: { type: string }
-        text: { type: string }
-        llm_model: { type: string, nullable: true }
-        created_at: { type: string, format: date-time }
-
-    ExplanationList:
-      type: object
-      properties:
-        items:
-          type: array
-          items: { $ref: '#/components/schemas/Explanation' }
-        page: { type: integer }
-        page_size: { type: integer }
-        total: { type: integer }
-
-    CreateExplanationRequest:
-      type: object
-      description: Supply either a custom `text` or request generation from a model.
-      properties:
-        text:
-          type: string
-          nullable: true
-          description: If provided, store this as the latest explanation.
-        generate:
-          type: boolean
-          default: false
-        llm_model:
-          type: string
-          nullable: true
-          description: Model to use when `generate=true` (e.g., "qwen2.5:7b-instruct-q4_0").
-        include_reason_codes:
-          type: boolean
-          default: false
-        prompt_override:
-          type: string
-          nullable: true
-      anyOf:
-        - required: [text]
-        - required: [generate]
-
-    ShotPredictionBatchRequest:
-      type: object
-      required: [items]
-      properties:
-        items:
-          type: array
-          items:
-            type: object
-            properties:
-              shot_id: { type: string, nullable: true }
-              features:
-                $ref: '#/components/schemas/ShotFeatures'
-            anyOf:
-              - required: [shot_id]
-              - required: [features]
-        model:
-          $ref: '#/components/schemas/LogisticRegressionModel'
-        llm:
-          type: object
-          nullable: true
-          properties:
-            enabled: { type: boolean, default: false }
-            model: { type: string, nullable: true }
-            prompt_override: { type: string, nullable: true }
-
-    ShotPredictionBatchResponse:
-      type: object
-      properties:
-        items:
-          type: array
-          items:
-            type: object
-            required: [shot_id, prediction]
-            properties:
-              shot_id: { type: string }
-              match_id: { type: string, nullable: true }
-              prediction:
-                $ref: '#/components/schemas/ModelPrediction'
-
-    LlmModel:
-      type: object
-      properties:
-        name: { type: string, example: qwen2.5:7b-instruct-q4_0 }
-        provider: { type: string, example: ollama }
-        quantization: { type: string, example: q4_0 }
-        context_window: { type: integer, example: 32768 }
-        description: { type: string, nullable: true }
-
-    # --- Legacy request/response (unchanged structures, marked deprecated) ---
     ShotPredictionRequest:
       type: object
       required: [shots, model]
       properties:
         shots:
           type: array
-          items: { $ref: '#/components/schemas/ShotFeatures' }
+          items:
+            $ref: '#/components/schemas/ShotFeatures'
         model:
           $ref: '#/components/schemas/LogisticRegressionModel'
         llm_model:
           type: string
           nullable: true
-          description: Optional override for the Ollama model to use
+          description: Optional override for the LLM model to use
 
     ShotPredictionWithPromptRequest:
       allOf:
@@ -903,36 +176,42 @@ components:
           properties:
             prompt:
               type: string
-              description: Custom prompt text sent directly to the language model
+              description: Custom prompt text to send to the language model
 
-    ShotPredictionResponseLegacy:
+    ShotPredictionResponse:
       type: object
       required: [shots, explanation, llm_model]
       properties:
         shots:
           type: array
-          items: { $ref: '#/components/schemas/ShotPredictionLegacy' }
+          items:
+            $ref: '#/components/schemas/ShotPrediction'
         explanation:
           type: string
           description: Natural-language explanation returned by the language model
         llm_model:
           type: string
-          description: Name of the Ollama model that produced the explanation
+          description: Name of the model that produced the explanation
 
-    ShotPredictionLegacy:
+    ShotPrediction:
       type: object
       required: [xg, reason_codes]
       properties:
-        shot_id: { type: string, nullable: true }
-        match_id: { type: string, nullable: true }
+        shot_id:
+          type: string
+          nullable: true
+        match_id:
+          type: string
+          nullable: true
         xg:
           type: number
           format: float
+          description: Expected goal probability for the shot
         reason_codes:
           type: array
-          items: { $ref: '#/components/schemas/ReasonCode' }
+          items:
+            $ref: '#/components/schemas/ReasonCode'
 
-    # --- Shared model/feature schemas (carried over) ---
     ReasonCode:
       type: object
       required: [feature, value, coefficient, contribution]
@@ -949,18 +228,26 @@ components:
         intercept:
           type: number
           format: float
+          description: Intercept term of the logistic regression model
         coefficients:
           type: object
           additionalProperties:
             type: number
             format: float
+          description: Mapping of feature names to coefficient values
 
     ShotFeatures:
       type: object
       required: [start_x, start_y]
       properties:
-        shot_id: { type: string, nullable: true }
-        match_id: { type: string, nullable: true }
+        shot_id:
+          type: string
+          nullable: true
+          description: Identifier of the shot within the match or dataset
+        match_id:
+          type: string
+          nullable: true
+          description: Identifier of the match the shot belongs to
         start_x: { type: number, format: float }
         start_y: { type: number, format: float }
         is_set_piece: { type: boolean, default: false }
@@ -979,12 +266,3 @@ components:
         follows_dribble: { type: boolean, nullable: true }
         deflected: { type: boolean, nullable: true }
         aerial_won: { type: boolean, nullable: true }
-
-    ErrorResponse:
-      type: object
-      properties:
-        error: { type: string }
-        code: { type: string }
-        details:
-          type: object
-          additionalProperties: true
