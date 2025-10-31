@@ -1,8 +1,16 @@
 """FastAPI service exposing xGoal logistic regression inference endpoints."""
 
 from __future__ import annotations
+
 from typing import Any, Dict, Optional
+
 from fastapi import FastAPI, HTTPException
+
+try:  # pragma: no cover - support lightweight FastAPI stubs in tests
+    from fastapi import Query
+except (ImportError, AttributeError):  # pragma: no cover - fallback for simplified fastapi
+    def Query(default: Any = ..., **_: Any) -> Any:  # type: ignore
+        return default
 
 from xgoal_tutor.api.models import (
     ShotPredictionRequest,
@@ -15,6 +23,10 @@ from xgoal_tutor.api.services import (
     group_predictions_by_match,
 )
 
+from ._lineups import get_match_lineups as load_match_lineups
+from ._matches import list_matches as fetch_matches
+from ._shots import list_match_shot_features as fetch_match_shots
+
 app = FastAPI(title="xGoal Inference Service", version="1.0.0")
 
 _LLM_CLIENT = create_llm_client()
@@ -22,7 +34,9 @@ _MATCH_CACHE: Dict[str, ShotPredictionResponse] = {}
 
 
 @app.get("/matches")
-def list_matches() -> Dict[str, Any]:
+def list_matches(
+    page: int = Query(1, ge=1), page_size: int = Query(100, ge=1, le=200)
+) -> Dict[str, Any]:
     """
     List matches available to the tutor UI (paged).
 
@@ -49,7 +63,7 @@ def list_matches() -> Dict[str, Any]:
     -----
     * Wire up pagination params (page, page_size) and return a paged listing for Streamlit dropdowns.
     """
-    raise HTTPException(status_code=501, detail="Listing matches is not yet implemented")
+    return fetch_matches(page=page, page_size=page_size)
 
 
 @app.get("/matches/{match_id}/lineups")
@@ -75,7 +89,7 @@ def get_match_lineups(match_id: str) -> Dict[str, Any]:
     -----
     * Provide jersey numbers and position names where available to support the Streamlit lineup view.
     """
-    raise HTTPException(status_code=501, detail="Match lineup retrieval is not yet implemented")
+    return load_match_lineups(match_id)
 
 
 @app.post("/matches/{match_id}/summary")
@@ -320,4 +334,4 @@ def list_match_shot_features(match_id: str) -> Dict[str, Any]:
     * This endpoint intentionally returns no predictions or explanations; the client should pipe the
       `features` array into `POST /predict_shots` as needed.
     """
-    raise HTTPException(status_code=501, detail="Match shot feature listing is not yet implemented")
+    return fetch_match_shots(match_id)
