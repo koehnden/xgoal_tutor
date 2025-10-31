@@ -87,6 +87,14 @@ def create_shot_positions_figure(
     fig = go.Figure()
     _add_pitch_shapes(fig)
 
+    coordinate_system = positions.get("coordinate_system") if isinstance(positions, Mapping) else None
+    if isinstance(coordinate_system, Mapping):
+        length = float(coordinate_system.get("length") or coordinate_system.get("pitch_length") or PITCH_LENGTH)
+        width = float(coordinate_system.get("width") or coordinate_system.get("pitch_width") or PITCH_WIDTH)
+    else:
+        length = PITCH_LENGTH
+        width = PITCH_WIDTH
+
     items: Sequence[Mapping[str, Any]] = positions.get("items", []) if isinstance(positions, Mapping) else []
     for item in items:
         if not isinstance(item, Mapping):
@@ -95,6 +103,21 @@ def create_shot_positions_figure(
         team_name = player.get("team", {}).get("name") or item.get("team", {}).get("name") or "Team"
         role = item.get("role")
         style = _ROLE_STYLE.get(role, {"color": "#7f7f7f", "symbol": "circle"})
+        x = item.get("x")
+        y = item.get("y")
+        if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+            location = item.get("location") or item.get("coordinates")
+            if isinstance(location, Mapping):
+                x = location.get("x") or location.get("lon") or location.get(0)
+                y = location.get("y") or location.get("lat") or location.get(1)
+            elif isinstance(location, Sequence) and len(location) >= 2:
+                x, y = location[0], location[1]
+        if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+            continue
+        if 0.0 <= x <= 1.0 and length > 1:
+            x = x * length
+        if 0.0 <= y <= 1.0 and width > 1:
+            y = y * width
         marker = dict(
             size=12,
             color=style["color"],
@@ -104,8 +127,8 @@ def create_shot_positions_figure(
         hover_text = _player_hover_text(player, team_name)
         fig.add_trace(
             go.Scatter(
-                x=[item.get("x")],
-                y=[item.get("y")],
+                x=[x],
+                y=[y],
                 mode="markers",
                 marker=marker,
                 name=f"{team_name} ({role})" if role else team_name,
