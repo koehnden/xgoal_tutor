@@ -18,6 +18,9 @@ matplotlib = "^3.9.2"
 ollama = "^0.3.3"
 fastapi = "^0.115.5"
 uvicorn = {version = "^0.32.1", extras = ["standard"]}
+streamlit = "^1.40.0"
+requests = "^2.32.3"
+plotly = "^5.24.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2"
