@@ -1,8 +1,12 @@
 """FastAPI service exposing xGoal logistic regression inference endpoints."""
 
 from __future__ import annotations
+import logging
 from typing import Any, Dict, Optional
 from fastapi import FastAPI, HTTPException
+from fastapi.requests import Request
+from fastapi.responses import Response
+from uuid import uuid4
 
 from xgoal_tutor.api.models import (
     ShotPredictionRequest,
@@ -14,11 +18,15 @@ from xgoal_tutor.api.services import (
     generate_shot_predictions,
     group_predictions_by_match,
 )
+from xgoal_tutor.api._jobs import get_job, get_latest_job, insert_job
+from xgoal_tutor.api._queries import match_exists, player_participated
+from xgoal_tutor.api.tasks import queue_match_summary, queue_player_summary
 
 app = FastAPI(title="xGoal Inference Service", version="1.0.0")
 
 _LLM_CLIENT = create_llm_client()
 _MATCH_CACHE: Dict[str, ShotPredictionResponse] = {}
+_LOGGER = logging.getLogger(__name__)
 
 
 @app.get("/matches")
@@ -79,148 +87,123 @@ def get_match_lineups(match_id: str) -> Dict[str, Any]:
 
 
 @app.post("/matches/{match_id}/summary")
-def generate_match_summary(match_id: str) -> Dict[str, Any]:
-    """
-    Enqueue asynchronous tactical summary generation for the match.
+def generate_match_summary(match_id: str, request: Request, response: Response) -> Dict[str, Any]:
+    if not match_exists(match_id):
+        raise HTTPException(status_code=404, detail="Match not found")
 
-    Description
-    -----------
-    Produces team-level insights for both sides ("home_team", "away_team") using shot-level
-    predictions/explanations and player summaries. Output (when ready) includes:
-    - positives (list of {explanation, evidence_shot_ids})
-    - improvements (list of {explanation, evidence_shot_ids})
-    - best_player ({player, explanation, evidence_shot_ids})
-    - improve_player ({player, explanation, evidence_shot_ids})
+    generation_id = uuid4().hex
+    try:
+        job = insert_job(generation_id, kind="match", match_id=match_id)
+        queue_match_summary(generation_id, match_id)
+    except Exception as exc:  # pragma: no cover - defensive branch for DB/broker issues
+        _LOGGER.exception("Failed to enqueue match summary for %s", match_id)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
-    Returns
-    -------
-    202 Accepted with body:
-    {
-      "generation_id": "...",
-      "match_id": "...",
-      "status": "queued" | "running",
-      "status_url": "http://.../matches/{match_id}/summary?generation_id=...",
-      "enqueued_at": "RFC3339"
+    status_url = str(request.url_for("get_match_summary_status", match_id=match_id)) + f"?generation_id={generation_id}"
+    response.headers["Location"] = status_url
+    response.status_code = 202
+    return {
+        "generation_id": generation_id,
+        "match_id": match_id,
+        "status": job.status,
+        "status_url": status_url,
+        "enqueued_at": job.created_at,
     }
-
-    Notes
-    -----
-    * This is a placeholder; integrate your job queue and return 202 accordingly.
-    """
-    raise HTTPException(status_code=501, detail="Match summary generation is not yet implemented")
 
 
 @app.get("/matches/{match_id}/summary")
 def get_match_summary_status(match_id: str, generation_id: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Poll the status of a match summary job.
+    if generation_id:
+        job = get_job(generation_id)
+    else:
+        job = get_latest_job("match", match_id)
 
-    Parameters
-    ----------
-    match_id : str
-        Identifier of the match whose summary job should be queried.
-    generation_id : Optional[str]
-        Optional job identifier. If omitted, return the latest job for this match (if any).
+    if job is None or job.kind != "match" or job.match_id != match_id:
+        raise HTTPException(status_code=404, detail="Match summary job not found")
 
-    Returns
-    -------
-    200 OK with:
-    {
-      "generation_id": "...",
-      "match_id": "...",
-      "status": "queued" | "running" | "done" | "failed",
-      "created_at": "RFC3339",
-      "updated_at": "RFC3339",
-      "expires_at": "RFC3339 | null",
-      "result": {  # present iff status == "done"
-        "result": { "home_team": {...}, "away_team": {...}, "score_home": 2, "score_away": 1, "final": true },
-        "home_insights": {...},  # uses `explanation` fields consistently
-        "away_insights": {...},
-        "generated_at": "RFC3339",
-        "llm_model": "..."
-      },
-      "error_message": "..." | null
+    result = job.result if job.status == "done" else None
+    return {
+        "generation_id": job.generation_id,
+        "match_id": job.match_id,
+        "status": job.status,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+        "expires_at": job.expires_at,
+        "result": result,
+        "error_message": job.error_message,
     }
-
-    Notes
-    -----
-    * Placeholder: look up your job store and return 404 if no job exists.
-    """
-    raise HTTPException(status_code=501, detail="Match summary status retrieval is not yet implemented")
 
 
 @app.post("/matches/{match_id}/players/{player_id}/summary")
-def generate_match_player_summary(match_id: str, player_id: str) -> Dict[str, Any]:
-    """
-    Enqueue asynchronous player summary generation for the given match/player.
+def generate_match_player_summary(
+    match_id: str,
+    player_id: str,
+    request: Request,
+    response: Response,
+) -> Dict[str, Any]:
+    if not match_exists(match_id):
+        raise HTTPException(status_code=404, detail="Match not found")
+    if not player_participated(match_id, player_id):
+        raise HTTPException(status_code=404, detail="Player not found for match")
 
-    Description
-    -----------
-    Produces player-level insights based on shot-level predictions/explanations where the player
-    was involved. Output (when ready) includes:
-    - positives (list of {explanation, evidence_shot_ids})
-    - improvements (list of {explanation, evidence_shot_ids})
+    generation_id = uuid4().hex
+    try:
+        job = insert_job(generation_id, kind="player", match_id=match_id, player_id=player_id)
+        queue_player_summary(generation_id, match_id, player_id)
+    except Exception as exc:  # pragma: no cover - defensive branch for DB/broker issues
+        _LOGGER.exception("Failed to enqueue player summary for %s/%s", match_id, player_id)
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
-    Returns
-    -------
-    202 Accepted with body:
-    {
-      "generation_id": "...",
-      "match_id": "...",
-      "player_id": "...",
-      "status": "queued" | "running",
-      "status_url": "http://.../matches/{match_id}/players/{player_id}/summary?generation_id=...",
-      "enqueued_at": "RFC3339"
+    status_url = str(
+        request.url_for(
+            "get_match_player_summary_status",
+            match_id=match_id,
+            player_id=player_id,
+        )
+    ) + f"?generation_id={generation_id}"
+    response.headers["Location"] = status_url
+    response.status_code = 202
+    return {
+        "generation_id": generation_id,
+        "match_id": match_id,
+        "player_id": player_id,
+        "status": job.status,
+        "status_url": status_url,
+        "enqueued_at": job.created_at,
     }
-
-    Notes
-    -----
-    * Placeholder: integrate queue/enqueue logic and return 202; currently 501.
-    """
-    raise HTTPException(status_code=501, detail="Match player summary generation is not yet implemented")
 
 
 @app.get("/matches/{match_id}/players/{player_id}/summary")
-def get_match_player_summary_status(match_id: str, player_id: str, generation_id: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Poll the status of a player match summary job.
+def get_match_player_summary_status(
+    match_id: str,
+    player_id: str,
+    generation_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    if generation_id:
+        job = get_job(generation_id)
+    else:
+        job = get_latest_job("player", match_id, player_id)
 
-    Parameters
-    ----------
-    match_id : str
-        Match identifier.
-    player_id : str
-        Player identifier within the match context.
-    generation_id : Optional[str]
-        Optional job identifier. If omitted, return the latest job for (match_id, player_id) if any.
+    if (
+        job is None
+        or job.kind != "player"
+        or job.match_id != match_id
+        or job.player_id != player_id
+    ):
+        raise HTTPException(status_code=404, detail="Player summary job not found")
 
-    Returns
-    -------
-    200 OK with:
-    {
-      "generation_id": "...",
-      "match_id": "...",
-      "player_id": "...",
-      "status": "queued" | "running" | "done" | "failed",
-      "created_at": "RFC3339",
-      "updated_at": "RFC3339",
-      "expires_at": "RFC3339 | null",
-      "result": {   # present iff status == "done"
-        "player": {...},
-        "team": {...},
-        "positives": [{"explanation": "...", "evidence_shot_ids": ["..."]}],
-        "improvements": [{"explanation": "...", "evidence_shot_ids": ["..."]}],
-        "generated_at": "RFC3339",
-        "llm_model": "..."
-      },
-      "error_message": "..." | null
+    result = job.result if job.status == "done" else None
+    return {
+        "generation_id": job.generation_id,
+        "match_id": job.match_id,
+        "player_id": job.player_id,
+        "status": job.status,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+        "expires_at": job.expires_at,
+        "result": result,
+        "error_message": job.error_message,
     }
-
-    Notes
-    -----
-    * Placeholder: read from job store and return 404 if not found.
-    """
-    raise HTTPException(status_code=501, detail="Match player summary status retrieval is not yet implemented")
 
 
 @app.post("/predict_shots", response_model=ShotPredictionResponse)

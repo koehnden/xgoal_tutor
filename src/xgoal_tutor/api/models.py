@@ -1,10 +1,111 @@
-"""Pydantic models used by the xGoal inference API."""
+"""Shared data structures for the xGoal inference API.
+
+This module hosts both the public Pydantic schemas surfaced by the HTTP layer and
+lightweight dataclasses that the asynchronous orchestration code relies on.
+Centralising the dataclasses here keeps import relationships straightforward and
+avoids sprinkling duplicate type declarations throughout the API package.
+"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
+
+
+# ---------------------------------------------------------------------------
+# Dataclasses used internally by the asynchronous job pipeline
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class JobRecord:
+    """Structured representation of a stored background job."""
+
+    generation_id: str
+    kind: str
+    match_id: str
+    player_id: Optional[str]
+    status: str
+    created_at: str
+    updated_at: str
+    expires_at: Optional[str]
+    result: Optional[Dict[str, object]]
+    error_message: Optional[str]
+
+
+@dataclass
+class MatchInfo:
+    """Key metadata describing a football match."""
+
+    match_id: str
+    home_team_id: str
+    away_team_id: str
+    home_team_name: str
+    away_team_name: str
+    competition: Optional[str]
+    season: Optional[str]
+    venue: Optional[str]
+    match_date: Optional[str]
+    label: Optional[str]
+
+
+@dataclass
+class PlayerInfo:
+    """Lineup metadata for a participant in a match."""
+
+    player_id: str
+    name: str
+    team_id: Optional[str]
+    jersey_number: Optional[int]
+    position: Optional[str]
+
+
+@dataclass
+class ShotRow:
+    """Row returned from the shots table enriched with freeze-frame aggregates."""
+
+    shot_id: str
+    match_id: str
+    team_id: Optional[str]
+    opponent_team_id: Optional[str]
+    player_id: Optional[str]
+    player_name: Optional[str]
+    jersey_number: Optional[int]
+    position_name: Optional[str]
+    period: Optional[int]
+    minute: Optional[int]
+    second: Optional[float]
+    is_goal: Optional[int]
+    score_home: Optional[int]
+    score_away: Optional[int]
+    start_x: float
+    start_y: float
+    is_set_piece: Optional[int]
+    is_corner: Optional[int]
+    is_free_kick: Optional[int]
+    first_time: Optional[int]
+    under_pressure: Optional[int]
+    body_part: Optional[str]
+    one_on_one: Optional[int]
+    open_goal: Optional[int]
+    follows_dribble: Optional[int]
+    deflected: Optional[int]
+    aerial_won: Optional[int]
+    freeze_frame_available: Optional[int]
+    ff_keeper_x: Optional[float]
+    ff_keeper_y: Optional[float]
+    ff_keeper_count: Optional[int]
+    ff_opponents: Optional[int]
+
+
+@dataclass
+class ShotContext:
+    """Container linking raw shot data with its prediction."""
+
+    row: ShotRow
+    prediction: "ShotPrediction"
 
 
 class LogisticRegressionModel(BaseModel):
