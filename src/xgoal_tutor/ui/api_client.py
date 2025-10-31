@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 import requests
 import streamlit as st
@@ -53,51 +53,80 @@ def get_match_lineups(base_url: str, match_id: str) -> Dict[str, Any]:
     return response.json()
 
 
-def generate_match_summary(base_url: str, match_id: str) -> Dict[str, Any]:
-    """Trigger match summary generation and return the resulting payload."""
+@st.cache_data(show_spinner=False)
+def get_match_shots(base_url: str, match_id: str) -> Dict[str, Any]:
+    """Return the list of shots (features + context) for the given match."""
+    response = requests.get(
+        _build_url(base_url, f"/match/{match_id}/shots"),
+        timeout=DEFAULT_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    payload: Any = response.json()
+    if isinstance(payload, dict) and "items" in payload:
+        return payload
+    if isinstance(payload, list):
+        return {"items": payload}
+    return {"items": []}
+
+
+def enqueue_match_summary(base_url: str, match_id: str) -> Dict[str, Any]:
+    """Trigger asynchronous generation of a match summary."""
     response = requests.post(
-        _build_url(base_url, f"/matches/{match_id}/summary"), timeout=DEFAULT_TIMEOUT_SECONDS
+        _build_url(base_url, f"/matches/{match_id}/summary"),
+        timeout=DEFAULT_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
     return response.json()
 
 
-@st.cache_data(show_spinner=False)
-def get_match_shots(
-    base_url: str, match_id: str, *, include: Optional[str] = None, goals_only: bool = False
-) -> List[Dict[str, Any]]:
-    """Return the list of shots for the given match."""
-    params: Dict[str, Any] = {"page_size": 200, "page": 1}
-    if include:
-        params["include"] = include
-    if goals_only:
-        params["goals_only"] = str(goals_only).lower()
-    shots: List[Dict[str, Any]] = []
-    while True:
-        response = requests.get(
-            _build_url(base_url, f"/matches/{match_id}/shots"),
-            params=params,
-            timeout=DEFAULT_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-        payload: Dict[str, Any] = response.json()
-        items: Iterable[Dict[str, Any]] = payload.get("items", [])
-        shots.extend(items)
-        total = payload.get("total")
-        if total is not None and len(shots) >= int(total):
-            break
-        if not items:
-            break
-        params["page"] = params.get("page", 1) + 1
-    return shots
-
-
-@st.cache_data(show_spinner=False)
-def get_shot_detail(base_url: str, shot_id: str) -> Dict[str, Any]:
-    """Fetch detail for a shot including positions and explanations."""
-    params = {"include": "positions,model_prediction,explanation"}
+def get_match_summary_status(
+    base_url: str, match_id: str, *, generation_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """Retrieve the current status for a match summary generation job."""
+    params: Dict[str, Any] = {}
+    if generation_id:
+        params["generation_id"] = generation_id
     response = requests.get(
-        _build_url(base_url, f"/shots/{shot_id}"), params=params, timeout=DEFAULT_TIMEOUT_SECONDS
+        _build_url(base_url, f"/matches/{match_id}/summary"),
+        params=params or None,
+        timeout=DEFAULT_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def enqueue_player_summary(base_url: str, match_id: str, player_id: str) -> Dict[str, Any]:
+    """Trigger asynchronous generation of a player summary for a match."""
+    response = requests.post(
+        _build_url(base_url, f"/matches/{match_id}/players/{player_id}/summary"),
+        timeout=DEFAULT_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def get_player_summary_status(
+    base_url: str, match_id: str, player_id: str, *, generation_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """Retrieve the current status for a player summary generation job."""
+    params: Dict[str, Any] = {}
+    if generation_id:
+        params["generation_id"] = generation_id
+    response = requests.get(
+        _build_url(base_url, f"/matches/{match_id}/players/{player_id}/summary"),
+        params=params or None,
+        timeout=DEFAULT_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def predict_shots(base_url: str, payload: Mapping[str, Any]) -> Dict[str, Any]:
+    """Call the synchronous shot prediction endpoint."""
+    response = requests.post(
+        _build_url(base_url, "/predict_shots"),
+        json=payload,
+        timeout=DEFAULT_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
     return response.json()
