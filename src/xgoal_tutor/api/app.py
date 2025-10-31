@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import Any, Dict
 
 from fastapi import FastAPI, HTTPException
 
@@ -23,6 +23,27 @@ app = FastAPI(title="xGoal Inference Service", version="1.0.0")
 
 _LLM_CLIENT = create_llm_client()
 _MATCH_CACHE: Dict[str, ShotPredictionResponse] = {}
+
+
+@app.get("/matches")
+def list_matches() -> Dict[str, Any]:
+    """Return the collection of matches available to the tutor UI."""
+
+    raise HTTPException(status_code=501, detail="Listing matches is not yet implemented")
+
+
+@app.get("/matches/{match_id}/lineups")
+def get_match_lineups(match_id: str) -> Dict[str, Any]:
+    """Return the starting lineups for the requested match."""
+
+    raise HTTPException(status_code=501, detail="Match lineup retrieval is not yet implemented")
+
+
+@app.post("/matches/{match_id}/summary")
+def generate_match_summary(match_id: str) -> Dict[str, Any]:
+    """Produce a tactical summary for the provided match."""
+
+    raise HTTPException(status_code=501, detail="Match summary generation is not yet implemented")
 
 
 @app.post("/predict_shots", response_model=ShotPredictionResponse)
@@ -96,7 +117,16 @@ def predict_shots_with_prompt(
 
 @app.get("/match/{match_id}/shots", response_model=ShotPredictionResponse)
 def get_match_shots(match_id: str) -> ShotPredictionResponse:
+    """Return cached shot predictions for a single match."""
+
     cached = _MATCH_CACHE.get(match_id)
     if cached is None:
         raise HTTPException(status_code=404, detail="No cached predictions for match")
     return cached
+
+
+@app.get("/shots/{shot_id}")
+def get_shot_detail(shot_id: str) -> Dict[str, Any]:
+    """Return full detail for a specific shot, including positions and explanations."""
+
+    raise HTTPException(status_code=501, detail="Shot detail retrieval is not yet implemented")
