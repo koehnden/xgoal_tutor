@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: xGoal Inference Service
-  version: 1.0.0
+  version: 1.1.1
   description: |
     FastAPI service exposing xGoal logistic regression inference endpoints.
 servers:
@@ -18,7 +18,43 @@ paths:
       tags: [Matches]
       summary: List matches available to the tutor UI
       operationId: listMatches
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: page_size
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
       responses:
+        '200':
+          description: Paginated matches list for UI dropdowns
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchList'
+              examples:
+                default:
+                  value:
+                    items:
+                      - id: "SB-0001"
+                        label: "FC Barcelona – Chelsea FC (2025-09-21)"
+                        kickoff_utc: "2025-09-21T19:00:00Z"
+                        competition: "Friendly"
+                        season: "2025/26"
+                        home_team: { id: "SB-T-100", name: "FC Barcelona", short_name: "Barcelona" }
+                        away_team: { id: "SB-T-200", name: "Chelsea FC", short_name: "Chelsea" }
+                        venue: "Estadi Olímpic Lluís Companys"
+                      - id: "SB-0002"
+                        label: "Liverpool – AC Milan (2025-07-30)"
+                        kickoff_utc: "2025-07-30T18:30:00Z"
+                        competition: "Friendly"
+                        season: "2025/26"
+                        home_team: { id: "SB-T-300", name: "Liverpool" }
+                        away_team: { id: "SB-T-400", name: "AC Milan" }
+                        venue: "Anfield"
+                    page: 1
+                    page_size: 100
+                    total: 2
         '501':
           description: Listing matches is not yet implemented
 
@@ -33,6 +69,38 @@ paths:
           required: true
           schema: { type: string }
       responses:
+        '200':
+          description: Lineups for both teams (starters and bench)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchLineups'
+              examples:
+                default:
+                  value:
+                    home:
+                      team: { id: "SB-T-100", name: "FC Barcelona", short_name: "Barcelona" }
+                      starters:
+                        - player: { id: "SB-P-10", name: "Robert Lewandowski", jersey_number: 9, position: "CF" }
+                          is_starter: true
+                          position_name: "Centre Forward"
+                          sort_order: 1
+                        - player: { id: "SB-P-8", name: "Pedri", jersey_number: 8, position: "CM" }
+                          is_starter: true
+                          position_name: "Central Midfield"
+                          sort_order: 2
+                      bench:
+                        - player: { id: "SB-P-30", name: "Lamine Yamal", jersey_number: 27, position: "RW" }
+                          is_starter: false
+                          sort_order: 18
+                    away:
+                      team: { id: "SB-T-200", name: "Chelsea FC", short_name: "Chelsea" }
+                      starters:
+                        - player: { id: "SB-P-1", name: "Djordje Petrovic", jersey_number: 1, position: "GK" }
+                          is_starter: true
+                          position_name: "Goalkeeper"
+                          sort_order: 1
+                      bench: []
         '501':
           description: Match lineup retrieval is not yet implemented
 
@@ -41,10 +109,9 @@ paths:
       tags: [Matches]
       summary: Enqueue asynchronous tactical summary generation for a match
       description: >
-        Produces a tactical summary for each team ("home_team", "away_team")
-        based on individual shot summaries from `predict_shots` and player summaries.
-        Output (when ready) includes "positives", "improvements", "best_player", "improve_player".
-        This endpoint is asynchronous and immediately returns a generation identifier.
+        Produces a tactical summary for each team ("home_team", "away_team") based on individual
+        shot summaries from `predict_shots` and player summaries. Output (when ready) includes
+        "positives", "improvements", "best_player", "improve_player". Returns immediately with a job id.
       operationId: enqueueMatchSummary
       parameters:
         - name: match_id
@@ -56,32 +123,53 @@ paths:
           description: Summary generation enqueued
           headers:
             Location:
-              description: Polling URL for this job (if/when a status endpoint is added)
+              description: Polling URL for this job
               schema: { type: string, format: uri }
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/MatchSummarySubmissionResponse'
-              examples:
-                default:
-                  value:
-                    generation_id: "gen_01HZX3W1QZ1A3ZKQ2C7C0S3V7R"
-                    match_id: "SB-0001"
-                    status: "queued"
-                    status_url: "http://localhost:8000/matches/SB-0001/summary?generation_id=gen_01HZX3W1..."
-                    enqueued_at: "2025-10-31T12:00:00Z"
         '501':
           description: Match summary generation is not yet implemented
+
+    get:
+      tags: [Matches]
+      summary: Get status (and result if finished) of match summary generation
+      description: >
+        Poll the status of a match summary job. If `status` is "done", the payload includes the generated summary.
+        If no `generation_id` is specified, the latest job for the match is returned (if any).
+      operationId: getMatchSummaryStatus
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: generation_id
+          in: query
+          required: false
+          schema: { type: string }
+          description: Optional job identifier; if omitted, returns the latest job for the match (if any).
+      responses:
+        '200':
+          description: Summary job status and, if done, the result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchSummaryStatusResponse'
+        '404':
+          description: Summary job not found for the specified match (and generation_id if provided)
+        '501':
+          description: Match summary status retrieval is not yet implemented
 
   /matches/{match_id}/players/{player_id}/summary:
     post:
       tags: [Matches]
-      summary: Generate a tactical summary for a player within a match
+      summary: Enqueue asynchronous player summary generation for a match
       description: >
-        Produces a tactical summary for the specified player based on individual
-        shot summaries from `predict_shots` where the player was involved.
-        Output includes "positives" and "improvements".
-      operationId: generateMatchPlayerSummary
+        Produces a tactical summary for the specified player in the given match based on individual shot summaries
+        from `predict_shots` where the player was involved. Output (when ready) includes "positives" and "improvements".
+        Returns immediately with a job id.
+      operationId: enqueueMatchPlayerSummary
       parameters:
         - name: match_id
           in: path
@@ -92,13 +180,59 @@ paths:
           required: true
           schema: { type: string }
       responses:
+        '202':
+          description: Player summary generation enqueued
+          headers:
+            Location:
+              description: Polling URL for this job
+              schema: { type: string, format: uri }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerMatchSummarySubmissionResponse'
         '501':
           description: Match player summary generation is not yet implemented
+
+    get:
+      tags: [Matches]
+      summary: Get status (and result if finished) of player summary generation for a match
+      description: >
+        Poll the status of a player match summary job. If `status` is "done", the payload includes the generated summary.
+        If no `generation_id` is specified, the latest job for (match_id, player_id) is returned (if any).
+      operationId: getMatchPlayerSummaryStatus
+      parameters:
+        - name: match_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: player_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: generation_id
+          in: query
+          required: false
+          schema: { type: string }
+          description: Optional job identifier; if omitted, returns the latest job for this match+player (if any).
+      responses:
+        '200':
+          description: Player summary job status and, if done, the result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayerMatchSummaryStatusResponse'
+        '404':
+          description: Player summary job not found (match_id / player_id / generation_id)
+        '501':
+          description: Match player summary status retrieval is not yet implemented
 
   /predict_shots:
     post:
       tags: [Predictions]
-      summary: Predict xG and explanation using the managed prompt
+      summary: Predict xG and explanation (synchronous)
+      description: |
+        Synchronous prediction endpoint. You can optionally override the default LLM prompt
+        by setting `prompt_override`.
       operationId: predictShots
       requestBody:
         required: true
@@ -118,35 +252,14 @@ paths:
         '502':
           description: Failed to retrieve a response from the LLM
 
-  /predict_shots_with_prompt:
-    post:
-      tags: [Predictions]
-      summary: Predict xG and explanation with a custom prompt override
-      operationId: predictShotsWithPrompt
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ShotPredictionWithPromptRequest'
-      responses:
-        '200':
-          description: Predictions and explanation
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ShotPredictionResponse'
-        '400':
-          description: At least one shot must be provided
-        '502':
-          description: Failed to retrieve a response from the LLM
-
   /match/{match_id}/shots:
     get:
       tags: [Shots]
-      summary: Get cached shot predictions for a match
-      description: Returns the last cached result produced by /predict_shots for this match.
-      operationId: getMatchShots
+      summary: List shots for a match (features + light context; no predictions)
+      description: >
+        Returns shot **features** required to call `/predict_shots`, plus light context for UI:
+        `period`, `minute`, `second`, `result`, `scoreline_before`, `scoreline_after`, and the shooter identity.
+      operationId: listMatchShotFeatures
       parameters:
         - name: match_id
           in: path
@@ -154,113 +267,17 @@ paths:
           schema: { type: string }
       responses:
         '200':
-          description: Cached predictions for the match
+          description: Shot features for match
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ShotPredictionResponse'
+                $ref: '#/components/schemas/MatchShotFeaturesList'
         '404':
-          description: No cached predictions for match
-
-  /shots/{shot_id}:
-    get:
-      tags: [Shots]
-      summary: Get full detail for a specific shot
-      description: Includes positions and explanations (when implemented).
-      operationId: getShotDetail
-      parameters:
-        - name: shot_id
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        '501':
-          description: Shot detail retrieval is not yet implemented
+          description: No shots found for match
 
 components:
   schemas:
-    # ---------- Async match summary submission (for POST /matches/{match_id}/summary) ----------
-    MatchSummarySubmissionResponse:
-      type: object
-      required: [generation_id, match_id, status, status_url, enqueued_at]
-      properties:
-        generation_id:
-          type: string
-          description: Server-assigned identifier for the generation job
-        match_id:
-          type: string
-        status:
-          type: string
-          enum: ["queued", "running"]
-        status_url:
-          type: string
-          format: uri
-          description: Absolute URL to poll job status (reserved for a future GET status endpoint)
-        enqueued_at:
-          type: string
-          format: date-time
-
-    # ---------- Prediction request/response (current app models) ----------
-    ShotPredictionRequest:
-      type: object
-      required: [shots, model]
-      properties:
-        shots:
-          type: array
-          items:
-            $ref: '#/components/schemas/ShotFeatures'
-        model:
-          $ref: '#/components/schemas/LogisticRegressionModel'
-        llm_model:
-          type: string
-          nullable: true
-          description: Optional override for the LLM model to use
-
-    ShotPredictionWithPromptRequest:
-      allOf:
-        - $ref: '#/components/schemas/ShotPredictionRequest'
-        - type: object
-          required: [prompt]
-          properties:
-            prompt:
-              type: string
-              description: Custom prompt text to send to the language model
-
-    ShotPredictionResponse:
-      type: object
-      required: [shots, explanation, llm_model]
-      properties:
-        shots:
-          type: array
-          items:
-            $ref: '#/components/schemas/ShotPrediction'
-        explanation:
-          type: string
-          description: Natural-language explanation returned by the language model
-        llm_model:
-          type: string
-          description: Name of the model that produced the explanation
-
-    ShotPrediction:
-      type: object
-      required: [xg, reason_codes]
-      properties:
-        shot_id:
-          type: string
-          nullable: true
-        match_id:
-          type: string
-          nullable: true
-        xg:
-          type: number
-          format: float
-          description: Expected goal probability for the shot
-        reason_codes:
-          type: array
-          items:
-            $ref: '#/components/schemas/ReasonCode'
-
-    # ---------- Shared domain from old contract (kept for future implementations) ----------
+    # ---------- Matches list (for Streamlit dropdown) ----------
     Team:
       type: object
       properties:
@@ -277,6 +294,32 @@ components:
         team_id: { type: string, nullable: true }
         position: { type: string, nullable: true }
 
+    Match:
+      type: object
+      required: [id, home_team, away_team, kickoff_utc, label]
+      properties:
+        id: { type: string }
+        competition: { type: string, nullable: true }
+        season: { type: string, nullable: true }
+        kickoff_utc: { type: string, format: date-time }
+        home_team: { $ref: '#/components/schemas/Team' }
+        away_team: { $ref: '#/components/schemas/Team' }
+        venue: { type: string, nullable: true }
+        label:
+          type: string
+          description: Human-readable label like "FC Barcelona – Chelsea FC (2025-09-21)"
+
+    MatchList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Match' }
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer }
+
+    # ---------- Lineups ----------
     LineupPlayer:
       type: object
       properties:
@@ -303,7 +346,188 @@ components:
         home: { $ref: '#/components/schemas/LineupTeam' }
         away: { $ref: '#/components/schemas/LineupTeam' }
 
-    # ---------- Explanations & reason codes ----------
+    # ---------- Async summary jobs (as before) ----------
+    MatchSummarySubmissionResponse:
+      type: object
+      required: [generation_id, match_id, status, status_url, enqueued_at]
+      properties:
+        generation_id: { type: string }
+        match_id: { type: string }
+        status:
+          type: string
+          enum: ["queued", "running"]
+        status_url:
+          type: string
+          format: uri
+        enqueued_at: { type: string, format: date-time }
+
+    MatchSummaryStatusResponse:
+      type: object
+      required: [generation_id, match_id, status, created_at, updated_at]
+      properties:
+        generation_id: { type: string }
+        match_id: { type: string }
+        status:
+          type: string
+          enum: ["queued", "running", "done", "failed"]
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, nullable: true }
+        result:
+          $ref: '#/components/schemas/MatchSummary'
+        error_message: { type: string, nullable: true }
+
+    PlayerMatchSummarySubmissionResponse:
+      type: object
+      required: [generation_id, match_id, player_id, status, status_url, enqueued_at]
+      properties:
+        generation_id: { type: string }
+        match_id: { type: string }
+        player_id: { type: string }
+        status:
+          type: string
+          enum: ["queued", "running"]
+        status_url: { type: string, format: uri }
+        enqueued_at: { type: string, format: date-time }
+
+    PlayerMatchSummaryStatusResponse:
+      type: object
+      required: [generation_id, match_id, player_id, status, created_at, updated_at]
+      properties:
+        generation_id: { type: string }
+        match_id: { type: string }
+        player_id: { type: string }
+        status:
+          type: string
+          enum: ["queued", "running", "done", "failed"]
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, nullable: true }
+        result:
+          $ref: '#/components/schemas/PlayerMatchSummary'
+        error_message: { type: string, nullable: true }
+
+    # ---------- Summary payloads (consistent naming with 'explanation') ----------
+    MatchResult:
+      type: object
+      properties:
+        home_team: { $ref: '#/components/schemas/Team' }
+        away_team: { $ref: '#/components/schemas/Team' }
+        score_home: { type: integer }
+        score_away: { type: integer }
+        final: { type: boolean, default: true }
+        period_breakdown:
+          type: array
+          items:
+            type: object
+            properties:
+              period: { type: integer }
+              score_home: { type: integer }
+              score_away: { type: integer }
+
+    InsightItem:
+      type: object
+      properties:
+        explanation: { type: string }
+        evidence_shot_ids:
+          type: array
+          items: { type: string }
+
+    PlayerHighlight:
+      type: object
+      properties:
+        player: { $ref: '#/components/schemas/Player' }
+        explanation: { type: string }
+        evidence_shot_ids:
+          type: array
+          items: { type: string }
+
+    TeamInsights:
+      type: object
+      properties:
+        team: { $ref: '#/components/schemas/Team' }
+        positives:
+          type: array
+          items: { $ref: '#/components/schemas/InsightItem' }
+        improvements:
+          type: array
+          items: { $ref: '#/components/schemas/InsightItem' }
+        best_player: { $ref: '#/components/schemas/PlayerHighlight' }
+        improve_player: { $ref: '#/components/schemas/PlayerHighlight' }
+
+    MatchSummary:
+      type: object
+      properties:
+        result: { $ref: '#/components/schemas/MatchResult' }
+        home_insights: { $ref: '#/components/schemas/TeamInsights' }
+        away_insights: { $ref: '#/components/schemas/TeamInsights' }
+        generated_at: { type: string, format: date-time }
+        llm_model: { type: string, nullable: true }
+
+    PlayerMatchSummary:
+      type: object
+      properties:
+        player: { $ref: '#/components/schemas/Player' }
+        team: { $ref: '#/components/schemas/Team' }
+        positives:
+          type: array
+          items: { $ref: '#/components/schemas/InsightItem' }
+        improvements:
+          type: array
+          items: { $ref: '#/components/schemas/InsightItem' }
+        generated_at: { type: string, format: date-time }
+        llm_model: { type: string, nullable: true }
+
+    # ---------- Predictions (sync) ----------
+    ShotPredictionRequest:
+      type: object
+      required: [shots, model]
+      properties:
+        shots:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShotFeatures'
+        model:
+          $ref: '#/components/schemas/LogisticRegressionModel'
+        llm_model:
+          type: string
+          nullable: true
+          description: Optional override for the LLM model to use
+        prompt_override:
+          type: string
+          nullable: true
+          description: Optional custom prompt to override the default LLM prompt
+
+    ShotPredictionResponse:
+      type: object
+      required: [shots, explanation, llm_model]
+      properties:
+        shots:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShotPrediction'
+        explanation:
+          type: string
+          description: Natural-language explanation returned by the language model
+        llm_model:
+          type: string
+          description: Name of the model that produced the explanation
+
+    ShotPrediction:
+      type: object
+      required: [xg, reason_codes]
+      properties:
+        shot_id: { type: string, nullable: true }
+        match_id: { type: string, nullable: true }
+        xg:
+          type: number
+          format: float
+          description: Expected goal probability for the shot
+        reason_codes:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReasonCode'
+
     ReasonCode:
       type: object
       required: [feature, value, coefficient, contribution]
@@ -358,3 +582,50 @@ components:
         follows_dribble: { type: boolean, nullable: true }
         deflected: { type: boolean, nullable: true }
         aerial_won: { type: boolean, nullable: true }
+
+    # ---------- Shot feature listing for a match ----------
+    MatchShotFeaturesList:
+      type: object
+      description: Shot features and light context for a match
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchShotFeaturesItem'
+
+    MatchShotFeaturesItem:
+      type: object
+      required: [features]
+      properties:
+        period:
+          type: string
+          nullable: true
+          enum: ["1H", "2H", "ET1", "ET2", "PEN", "Unknown"]
+        minute: { type: integer, nullable: true }
+        second: { type: integer, nullable: true }
+        result:
+          type: string
+          nullable: true
+          enum: ["Goal", "Saved", "Off Target", "Blocked", "Post", "Bar", "Own Goal", "Unknown"]
+        scoreline_before:
+          type: object
+          nullable: true
+          properties:
+            home: { type: integer }
+            away: { type: integer }
+        scoreline_after:
+          type: object
+          nullable: true
+          properties:
+            home: { type: integer }
+            away: { type: integer }
+        shooter:
+          type: object
+          nullable: true
+          properties:
+            player_id:  { type: string }
+            player_name:{ type: string }
+            team_id:    { type: string }
+            team_name:  { type: string }
+        features:
+          $ref: '#/components/schemas/ShotFeatures'
