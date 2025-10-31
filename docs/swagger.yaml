@@ -8,17 +8,14 @@ servers:
   - url: http://localhost:8000
 
 tags:
-  - name: matches
-    description: Match discovery and summaries
-  - name: inference
-    description: xG predictions and LLM explanations
-  - name: shots
-    description: Shot retrieval
+  - name: Matches
+  - name: Predictions
+  - name: Shots
 
 paths:
   /matches:
     get:
-      tags: [matches]
+      tags: [Matches]
       summary: List matches available to the tutor UI
       operationId: listMatches
       responses:
@@ -27,7 +24,7 @@ paths:
 
   /matches/{match_id}/lineups:
     get:
-      tags: [matches]
+      tags: [Matches]
       summary: Get starting lineups for a match
       operationId: getMatchLineups
       parameters:
@@ -41,22 +38,49 @@ paths:
 
   /matches/{match_id}/summary:
     post:
-      tags: [matches]
-      summary: Generate a tactical summary for a match
-      operationId: generateMatchSummary
+      tags: [Matches]
+      summary: Enqueue asynchronous tactical summary generation for a match
+      description: >
+        Produces a tactical summary for each team ("home_team", "away_team")
+        based on individual shot summaries from `predict_shots` and player summaries.
+        Output (when ready) includes "positives", "improvements", "best_player", "improve_player".
+        This endpoint is asynchronous and immediately returns a generation identifier.
+      operationId: enqueueMatchSummary
       parameters:
         - name: match_id
           in: path
           required: true
           schema: { type: string }
       responses:
+        '202':
+          description: Summary generation enqueued
+          headers:
+            Location:
+              description: Polling URL for this job (if/when a status endpoint is added)
+              schema: { type: string, format: uri }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchSummarySubmissionResponse'
+              examples:
+                default:
+                  value:
+                    generation_id: "gen_01HZX3W1QZ1A3ZKQ2C7C0S3V7R"
+                    match_id: "SB-0001"
+                    status: "queued"
+                    status_url: "http://localhost:8000/matches/SB-0001/summary?generation_id=gen_01HZX3W1..."
+                    enqueued_at: "2025-10-31T12:00:00Z"
         '501':
           description: Match summary generation is not yet implemented
 
   /matches/{match_id}/players/{player_id}/summary:
     post:
-      tags: [matches]
+      tags: [Matches]
       summary: Generate a tactical summary for a player within a match
+      description: >
+        Produces a tactical summary for the specified player based on individual
+        shot summaries from `predict_shots` where the player was involved.
+        Output includes "positives" and "improvements".
       operationId: generateMatchPlayerSummary
       parameters:
         - name: match_id
@@ -73,7 +97,7 @@ paths:
 
   /predict_shots:
     post:
-      tags: [inference]
+      tags: [Predictions]
       summary: Predict xG and explanation using the managed prompt
       operationId: predictShots
       requestBody:
@@ -96,7 +120,7 @@ paths:
 
   /predict_shots_with_prompt:
     post:
-      tags: [inference]
+      tags: [Predictions]
       summary: Predict xG and explanation with a custom prompt override
       operationId: predictShotsWithPrompt
       requestBody:
@@ -119,8 +143,9 @@ paths:
 
   /match/{match_id}/shots:
     get:
-      tags: [matches]
+      tags: [Shots]
       summary: Get cached shot predictions for a match
+      description: Returns the last cached result produced by /predict_shots for this match.
       operationId: getMatchShots
       parameters:
         - name: match_id
@@ -139,8 +164,9 @@ paths:
 
   /shots/{shot_id}:
     get:
-      tags: [shots]
+      tags: [Shots]
       summary: Get full detail for a specific shot
+      description: Includes positions and explanations (when implemented).
       operationId: getShotDetail
       parameters:
         - name: shot_id
@@ -153,6 +179,28 @@ paths:
 
 components:
   schemas:
+    # ---------- Async match summary submission (for POST /matches/{match_id}/summary) ----------
+    MatchSummarySubmissionResponse:
+      type: object
+      required: [generation_id, match_id, status, status_url, enqueued_at]
+      properties:
+        generation_id:
+          type: string
+          description: Server-assigned identifier for the generation job
+        match_id:
+          type: string
+        status:
+          type: string
+          enum: ["queued", "running"]
+        status_url:
+          type: string
+          format: uri
+          description: Absolute URL to poll job status (reserved for a future GET status endpoint)
+        enqueued_at:
+          type: string
+          format: date-time
+
+    # ---------- Prediction request/response (current app models) ----------
     ShotPredictionRequest:
       type: object
       required: [shots, model]
@@ -212,6 +260,50 @@ components:
           items:
             $ref: '#/components/schemas/ReasonCode'
 
+    # ---------- Shared domain from old contract (kept for future implementations) ----------
+    Team:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        short_name: { type: string, nullable: true }
+
+    Player:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        jersey_number: { type: integer, nullable: true }
+        team_id: { type: string, nullable: true }
+        position: { type: string, nullable: true }
+
+    LineupPlayer:
+      type: object
+      properties:
+        player: { $ref: '#/components/schemas/Player' }
+        is_starter: { type: boolean }
+        jersey_number: { type: integer, nullable: true }
+        position_name: { type: string, nullable: true }
+        sort_order: { type: integer, nullable: true }
+
+    LineupTeam:
+      type: object
+      properties:
+        team: { $ref: '#/components/schemas/Team' }
+        starters:
+          type: array
+          items: { $ref: '#/components/schemas/LineupPlayer' }
+        bench:
+          type: array
+          items: { $ref: '#/components/schemas/LineupPlayer' }
+
+    MatchLineups:
+      type: object
+      properties:
+        home: { $ref: '#/components/schemas/LineupTeam' }
+        away: { $ref: '#/components/schemas/LineupTeam' }
+
+    # ---------- Explanations & reason codes ----------
     ReasonCode:
       type: object
       required: [feature, value, coefficient, contribution]

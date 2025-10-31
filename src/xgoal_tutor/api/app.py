@@ -41,8 +41,9 @@ def get_match_lineups(match_id: str) -> Dict[str, Any]:
 
 @app.post("/matches/{match_id}/summary")
 def generate_match_summary(match_id: str) -> Dict[str, Any]:
-    """Produce a tactical summary for the provided match based on
-    individual shot summaries from `predict_shots` and summaries for players from (generate_player_summary)
+    """Produce a tactical summary for the provided match for each team "home_team" and "away team" based on
+    individual shot summaries from `predict_shots` and summaries for players from (generate_player_summary).
+    Output includes "positives", "improvements", "best_player", "improve_player".
     """
 
     raise HTTPException(status_code=501, detail="Match summary generation is not yet implemented")
@@ -51,7 +52,8 @@ def generate_match_summary(match_id: str) -> Dict[str, Any]:
 @app.post("/matches/{match_id}/players/{player_id}/summary")
 def generate_match_player_summary(match_id: str, player_id: str) -> Dict[str, Any]:
     """Produce a tactical summary for the provided player for the match based on
-    individual shot summaries from `predict_shots` where the player was involved
+    individual shot summaries from `predict_shots` where the player was involved. Output includes "positives"
+    and "improvements".
     """
 
     raise HTTPException(status_code=501, detail="Match player summary generation is not yet implemented")
