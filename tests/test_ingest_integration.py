@@ -56,7 +56,14 @@ def test_ingest_cli_populates_lineups(tmp_path: Path, ingest_cli_module) -> None
 
     db_path = tmp_path / "integration.sqlite"
     ingest_cli_module.main(
-        [str(events_dir), "--database", str(db_path), "--limit", "10"]
+        [
+            "--statsbomb-root",
+            str(root),
+            "--database",
+            str(db_path),
+            "--limit",
+            "10",
+        ]
     )
 
     with sqlite3.connect(db_path) as conn:
