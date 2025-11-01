@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
+from tqdm import tqdm
+
 from xgoal_tutor.etl import load_match_events
 from xgoal_tutor.etl.download_helper import _list_events_with_trees_api, _raw_url
 from xgoal_tutor.etl.http_helper import _get_bytes
@@ -63,7 +65,7 @@ def _download_github_dataset(
     tmp_root = Path(tempfile.mkdtemp(prefix="statsbomb_"))
     local_event_paths: List[Path] = []
 
-    for rel_path in event_repo_paths:
+    for rel_path in tqdm(event_repo_paths, desc="Downloading events", unit="file"):
         local_path = tmp_root / rel_path
         local_path.parent.mkdir(parents=True, exist_ok=True)
         local_path.write_bytes(_get_bytes(_raw_url(owner, repo, ref, rel_path)))
@@ -120,7 +122,7 @@ def _download_dataset_from_zip(
 
         local_event_paths: List[Path] = []
 
-        for event_name in event_names:
+        for event_name in tqdm(event_names, desc="Extracting events", unit="file"):
             relative = event_name[len(prefix) :]
             parts = [part for part in relative.split("/") if part]
             local_path = tmp_root.joinpath(*parts)
