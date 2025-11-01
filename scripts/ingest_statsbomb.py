@@ -271,7 +271,7 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     parser.add_argument(
         "--ingest-only-new",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help=(
             "When enabled (default), ingest only the files downloaded during this run. "
             "Disable to ingest every available event file."
