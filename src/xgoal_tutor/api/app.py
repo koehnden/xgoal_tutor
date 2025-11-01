@@ -23,9 +23,9 @@ from xgoal_tutor.api.services import (
     group_predictions_by_match,
 )
 
-from ._lineups import get_match_lineups as load_match_lineups
-from ._matches import list_matches as fetch_matches
-from ._shots import list_match_shot_features as fetch_match_shots
+from xgoal_tutor.api._lineups import get_match_lineups as load_match_lineups
+from xgoal_tutor.api._matches import list_matches as fetch_matches
+from xgoal_tutor.api._shots import list_match_shot_features as fetch_match_shots
 
 app = FastAPI(title="xGoal Inference Service", version="1.0.0")
 

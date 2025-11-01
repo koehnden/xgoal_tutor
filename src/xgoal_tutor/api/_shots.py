@@ -7,8 +7,8 @@ from typing import Any, Dict, List
 import sqlite3
 from fastapi import HTTPException
 
-from ._database import get_db
-from ._row_utils import as_float, as_int, int_to_bool, row_value
+from xgoal_tutor.api._database import get_db
+from xgoal_tutor.api._row_utils import as_float, as_int, int_to_bool, row_value
 
 
 def _score_dict(home: Any, away: Any) -> Dict[str, int] | None:
