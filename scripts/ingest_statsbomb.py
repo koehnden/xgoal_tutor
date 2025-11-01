@@ -4,7 +4,6 @@ import argparse
 import contextlib
 import io
 import logging
-import shutil
 import sqlite3
 import sys
 import tempfile
@@ -21,6 +20,25 @@ from xgoal_tutor.etl.http_helper import _get_bytes
 
 
 logger = logging.getLogger(__name__)
+
+UNPROCESSED_ROOT = Path(__file__).resolve().parents[1] / "data" / "unprocessed"
+EVENTS_DIR = UNPROCESSED_ROOT / "events"
+LINEUPS_DIR = UNPROCESSED_ROOT / "lineups"
+
+for directory in (EVENTS_DIR, LINEUPS_DIR):
+    directory.mkdir(parents=True, exist_ok=True)
+
+
+def _relative_to_folder(path: str, folder: str) -> Path:
+    parts = Path(path).parts
+    for index, part in enumerate(parts):
+        if part == folder:
+            remainder = parts[index + 1 :]
+            if remainder:
+                return Path(*remainder)
+            break
+    # Fallback to the filename when the folder marker is missing or empty
+    return Path(parts[-1]) if parts else Path(path)
 
 
 def _parse_github_tree_url(url: str) -> Optional[tuple[str, str, str, str]]:
@@ -42,7 +60,7 @@ def _parse_github_tree_url(url: str) -> Optional[tuple[str, str, str, str]]:
 
 def _download_github_dataset(
     base_url: str, limit: Optional[int]
-) -> Tuple[List[Path], Optional[Path]]:
+) -> Tuple[List[Path], List[Path]]:
     gh = _parse_github_tree_url(base_url)
     if not gh:
         raise ValueError(
@@ -62,18 +80,23 @@ def _download_github_dataset(
     if limit is not None:
         event_repo_paths = event_repo_paths[:limit]
 
-    tmp_root = Path(tempfile.mkdtemp(prefix="statsbomb_"))
     local_event_paths: List[Path] = []
+    new_event_paths: List[Path] = []
 
     for rel_path in tqdm(event_repo_paths, desc="Downloading events", unit="file"):
-        local_path = tmp_root / rel_path
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        local_path.write_bytes(_get_bytes(_raw_url(owner, repo, ref, rel_path)))
+        relative_event = _relative_to_folder(rel_path, "events")
+        local_path = EVENTS_DIR / relative_event
         local_event_paths.append(local_path)
+
+        if not local_path.exists():
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_bytes(_get_bytes(_raw_url(owner, repo, ref, rel_path)))
+            new_event_paths.append(local_path)
 
         lineup_rel = rel_path.replace("/events/", "/lineups/", 1)
         if lineup_rel != rel_path:
-            lineup_local = tmp_root / lineup_rel
+            lineup_relative = _relative_to_folder(lineup_rel, "lineups")
+            lineup_local = LINEUPS_DIR / lineup_relative
             if not lineup_local.exists():
                 try:
                     lineup_local.parent.mkdir(parents=True, exist_ok=True)
@@ -83,15 +106,14 @@ def _download_github_dataset(
                 except Exception as exc:  # pragma: no cover - network failures
                     logger.debug("No lineup found for %s: %s", rel_path, exc)
 
-    return local_event_paths, tmp_root
+    return local_event_paths, new_event_paths
 
 
 def _download_dataset_from_zip(
     owner: str, repo: str, ref: str, subpath: str, limit: Optional[int]
-) -> Tuple[List[Path], Path]:
+) -> Tuple[List[Path], List[Path]]:
     zip_url = f"https://codeload.github.com/{owner}/{repo}/zip/refs/heads/{ref}"
     data = _get_bytes(zip_url)
-    tmp_root = Path(tempfile.mkdtemp(prefix="statsbomb_"))
 
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         prefix = f"{repo}-{ref}/"
@@ -121,25 +143,29 @@ def _download_dataset_from_zip(
         }
 
         local_event_paths: List[Path] = []
+        new_event_paths: List[Path] = []
 
         for event_name in tqdm(event_names, desc="Extracting events", unit="file"):
             relative = event_name[len(prefix) :]
-            parts = [part for part in relative.split("/") if part]
-            local_path = tmp_root.joinpath(*parts)
-            local_path.parent.mkdir(parents=True, exist_ok=True)
-            local_path.write_bytes(archive.read(event_name))
+            relative_path = _relative_to_folder(relative, "events")
+            local_path = EVENTS_DIR / relative_path
             local_event_paths.append(local_path)
+
+            if not local_path.exists():
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                local_path.write_bytes(archive.read(event_name))
+                new_event_paths.append(local_path)
 
             lineup_name = event_name.replace("/events/", "/lineups/", 1)
             if lineup_name in lineup_names:
                 lineup_relative = lineup_name[len(prefix) :]
-                lineup_parts = [part for part in lineup_relative.split("/") if part]
-                lineup_local = tmp_root.joinpath(*lineup_parts)
+                lineup_path = LINEUPS_DIR / _relative_to_folder(lineup_relative, "lineups")
+                lineup_local = lineup_path
                 if not lineup_local.exists():
                     lineup_local.parent.mkdir(parents=True, exist_ok=True)
                     lineup_local.write_bytes(archive.read(lineup_name))
 
-    return local_event_paths, tmp_root
+    return local_event_paths, new_event_paths
 
 
 def _collect_local_event_files(base_path: Path, limit: Optional[int]) -> List[Path]:
@@ -170,13 +196,13 @@ def _collect_local_event_files(base_path: Path, limit: Optional[int]) -> List[Pa
     return event_paths
 
 
-def iter_event_files(base_input: str, limit: Optional[int]) -> Tuple[List[Path], Optional[Path]]:
+def iter_event_files(base_input: str, limit: Optional[int]) -> Tuple[List[Path], List[Path]]:
     gh = _parse_github_tree_url(base_input)
     if gh:
         return _download_github_dataset(base_input, limit)
 
     paths = _collect_local_event_files(Path(base_input).expanduser().resolve(), limit)
-    return paths, None
+    return paths, []
 
 
 def ingest(event_paths: Sequence[Path], db_path: Path, stop_on_error: bool = False) -> None:
@@ -242,6 +268,15 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
             "Useful for quick test runs."
         ),
     )
+    parser.add_argument(
+        "--ingest-only-new",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "When enabled (default), ingest only the files downloaded during this run. "
+            "Disable to ingest every available event file."
+        ),
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     if args.limit is not None and args.limit <= 0:
@@ -250,19 +285,25 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
     db_path: Path = args.database.expanduser().resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     event_paths: List[Path]
-    cleanup_root: Optional[Path]
+    new_event_paths: List[Path]
     try:
-        event_paths, cleanup_root = iter_event_files(args.input, args.limit)
+        event_paths, new_event_paths = iter_event_files(args.input, args.limit)
     except Exception:
         logger.exception("Failed to resolve input dataset")
         raise
 
-    try:
-        ingest(event_paths, db_path, stop_on_error=args.stop_on_error)
-    finally:
-        if cleanup_root is not None:
-            with contextlib.suppress(Exception):
-                shutil.rmtree(cleanup_root, ignore_errors=True)
+    if args.ingest_only_new:
+        ingest_paths = new_event_paths
+        description = "newly downloaded"
+    else:
+        ingest_paths = event_paths
+        description = "available"
+
+    if not ingest_paths:
+        logger.info("No %s event files to ingest.", description)
+        return
+
+    ingest(ingest_paths, db_path, stop_on_error=args.stop_on_error)
 
 
 if __name__ == "__main__":
