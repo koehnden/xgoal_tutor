@@ -24,8 +24,10 @@ logger = logging.getLogger(__name__)
 UNPROCESSED_ROOT = Path(__file__).resolve().parents[1] / "data" / "unprocessed"
 EVENTS_DIR = UNPROCESSED_ROOT / "events"
 LINEUPS_DIR = UNPROCESSED_ROOT / "lineups"
+MATCHES_DIR = UNPROCESSED_ROOT / "matches"
+COMPETITIONS_PATH = UNPROCESSED_ROOT / "competitions.json"
 
-for directory in (EVENTS_DIR, LINEUPS_DIR):
+for directory in (EVENTS_DIR, LINEUPS_DIR, MATCHES_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
 
@@ -71,9 +73,15 @@ def _download_github_dataset(
     owner, repo, ref, subpath = gh
     subpath = subpath.strip("/")
     events_subpath = "/".join([p for p in [subpath, "events"] if p])
+    matches_subpath = "/".join([p for p in [subpath, "matches"] if p])
+    competitions_rel_path = "/".join([p for p in [subpath, "competitions.json"] if p])
 
     event_repo_paths = _list_events_with_trees_api(owner, repo, ref, events_subpath)
-    if not event_repo_paths:
+    match_repo_paths: List[str] = []
+    if matches_subpath:
+        match_repo_paths = _list_events_with_trees_api(owner, repo, ref, matches_subpath)
+
+    if not event_repo_paths or (matches_subpath and not match_repo_paths):
         return _download_dataset_from_zip(owner, repo, ref, subpath, limit)
 
     event_repo_paths.sort()
@@ -106,7 +114,40 @@ def _download_github_dataset(
                 except Exception as exc:  # pragma: no cover - network failures
                     logger.debug("No lineup found for %s: %s", rel_path, exc)
 
+    if matches_subpath:
+        match_repo_paths.sort()
+        for rel_path in tqdm(match_repo_paths, desc="Downloading matches", unit="file"):
+            relative_match = _relative_to_folder(rel_path, "matches")
+            local_match = MATCHES_DIR / relative_match
+            if local_match.exists():
+                continue
+            local_match.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                local_match.write_bytes(_get_bytes(_raw_url(owner, repo, ref, rel_path)))
+            except Exception as exc:  # pragma: no cover - network failures
+                logger.debug("Failed to download match metadata %s: %s", rel_path, exc)
+
+    _ensure_competitions_file(owner, repo, ref, competitions_rel_path)
+
     return local_event_paths, new_event_paths
+
+
+def _ensure_competitions_file(
+    owner: str, repo: str, ref: str, competitions_rel_path: str
+) -> None:
+    if not competitions_rel_path:
+        return
+    if COMPETITIONS_PATH.exists():
+        return
+
+    try:
+        data = _get_bytes(_raw_url(owner, repo, ref, competitions_rel_path))
+    except Exception as exc:  # pragma: no cover - network failures
+        logger.debug("Failed to download competitions metadata: %s", exc)
+        return
+
+    COMPETITIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    COMPETITIONS_PATH.write_bytes(data)
 
 
 def _download_dataset_from_zip(
@@ -120,6 +161,12 @@ def _download_dataset_from_zip(
         base_parts = [p for p in subpath.strip("/").split("/") if p]
         events_prefix = prefix + "/".join(base_parts + ["events"]).rstrip("/") + "/"
         lineups_prefix = prefix + "/".join(base_parts + ["lineups"]).rstrip("/") + "/"
+        matches_prefix = prefix + "/".join(base_parts + ["matches"]).rstrip("/") + "/"
+        competitions_name = (
+            prefix + "/".join(base_parts + ["competitions.json"]).strip("/")
+            if base_parts
+            else prefix + "competitions.json"
+        )
 
         event_names = [
             name
@@ -141,6 +188,12 @@ def _download_dataset_from_zip(
             for name in archive.namelist()
             if name.startswith(lineups_prefix) and name.endswith(".json")
         }
+
+        match_names = [
+            name
+            for name in archive.namelist()
+            if name.startswith(matches_prefix) and name.endswith(".json")
+        ]
 
         local_event_paths: List[Path] = []
         new_event_paths: List[Path] = []
@@ -164,6 +217,18 @@ def _download_dataset_from_zip(
                 if not lineup_local.exists():
                     lineup_local.parent.mkdir(parents=True, exist_ok=True)
                     lineup_local.write_bytes(archive.read(lineup_name))
+
+        for match_name in tqdm(match_names, desc="Extracting matches", unit="file"):
+            match_relative = match_name[len(prefix) :]
+            match_path = MATCHES_DIR / _relative_to_folder(match_relative, "matches")
+            if match_path.exists():
+                continue
+            match_path.parent.mkdir(parents=True, exist_ok=True)
+            match_path.write_bytes(archive.read(match_name))
+
+        if competitions_name in archive.namelist() and not COMPETITIONS_PATH.exists():
+            COMPETITIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            COMPETITIONS_PATH.write_bytes(archive.read(competitions_name))
 
     return local_event_paths, new_event_paths
 
