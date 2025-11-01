@@ -360,6 +360,75 @@ def test_load_match_events_uses_filename_for_match_id(tmp_path: Path) -> None:
         assert match is not None
 
 
+def test_match_metadata_enriched_from_matches_directory(tmp_path: Path) -> None:
+    dataset_root = tmp_path
+    events_path = dataset_root / "events" / "43" / "123.json"
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+
+    events = [
+        {
+            "id": "event-1",
+            "match_id": 123,
+            "team": {"id": 10, "name": "Event Home"},
+            "opponent": {"id": 20, "name": "Event Away"},
+            "type": {"name": "Pass"},
+        }
+    ]
+    events_path.write_text(json.dumps(events), encoding="utf-8")
+
+    matches_dir = dataset_root / "matches" / "43"
+    matches_dir.mkdir(parents=True, exist_ok=True)
+    matches_dir.joinpath("2025.json").write_text(
+        json.dumps(
+            [
+                {
+                    "match_id": 123,
+                    "competition": {"competition_id": 43},
+                    "season": {"season_id": 2025},
+                    "match_date": "2025-05-05",
+                    "stadium": {"name": "Metadata Arena"},
+                    "home_team": {"team_id": 10, "team_name": "Metadata Home"},
+                    "away_team": {"team_id": 20, "team_name": "Metadata Away"},
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    competitions_path = dataset_root / "competitions.json"
+    competitions_path.write_text(
+        json.dumps(
+            [
+                {
+                    "competition_id": 43,
+                    "season_id": 2025,
+                    "competition_name": "Metadata Cup",
+                    "season_name": "Metadata Season",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    database = tmp_path / "metadata.sqlite"
+    etl.load_match_events(events_path, database)
+
+    with sqlite3.connect(database) as conn:
+        conn.row_factory = sqlite3.Row
+        match = conn.execute(
+            "SELECT * FROM matches WHERE match_id = ?",
+            (123,),
+        ).fetchone()
+
+        assert match is not None
+        assert match["competition_name"] == "Metadata Cup"
+        assert match["season_name"] == "Metadata Season"
+        assert match["match_date"] == "2025-05-05"
+        assert match["venue"] == "Metadata Arena"
+        assert match["home_team_name"] == "Metadata Home"
+        assert match["away_team_name"] == "Metadata Away"
+
+
 def test_main_invokes_loader(monkeypatch: pytest.MonkeyPatch, sample_events: Path, tmp_path: Path) -> None:
     database = tmp_path / "cli.sqlite"
     called: dict[str, tuple[Path, Path]] = {}

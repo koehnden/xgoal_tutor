@@ -9,7 +9,7 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Iterable, List, Optional, Sequence, Set, Tuple
 from urllib.parse import urlparse
 
 from tqdm import tqdm
@@ -24,9 +24,13 @@ logger = logging.getLogger(__name__)
 UNPROCESSED_ROOT = Path(__file__).resolve().parents[1] / "data" / "unprocessed"
 EVENTS_DIR = UNPROCESSED_ROOT / "events"
 LINEUPS_DIR = UNPROCESSED_ROOT / "lineups"
+MATCHES_DIR = UNPROCESSED_ROOT / "matches"
+COMPETITIONS_PATH = UNPROCESSED_ROOT / "competitions.json"
 
-for directory in (EVENTS_DIR, LINEUPS_DIR):
+for directory in (EVENTS_DIR, LINEUPS_DIR, MATCHES_DIR):
     directory.mkdir(parents=True, exist_ok=True)
+
+COMPETITIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
 def _relative_to_folder(path: str, folder: str) -> Path:
@@ -76,17 +80,24 @@ def _download_github_dataset(
     if not event_repo_paths:
         return _download_dataset_from_zip(owner, repo, ref, subpath, limit)
 
+    _download_competitions_file(owner, repo, ref, subpath)
+
     event_repo_paths.sort()
     if limit is not None:
         event_repo_paths = event_repo_paths[:limit]
 
     local_event_paths: List[Path] = []
     new_event_paths: List[Path] = []
+    competition_filters: Set[str] = set()
 
     for rel_path in tqdm(event_repo_paths, desc="Downloading events", unit="file"):
         relative_event = _relative_to_folder(rel_path, "events")
         local_path = EVENTS_DIR / relative_event
         local_event_paths.append(local_path)
+
+        parts = relative_event.parts
+        if parts:
+            competition_filters.add(parts[0])
 
         if not local_path.exists():
             local_path.parent.mkdir(parents=True, exist_ok=True)
@@ -106,11 +117,67 @@ def _download_github_dataset(
                 except Exception as exc:  # pragma: no cover - network failures
                     logger.debug("No lineup found for %s: %s", rel_path, exc)
 
+    if competition_filters:
+        _download_matches_files(owner, repo, ref, subpath, competition_filters)
+
     return local_event_paths, new_event_paths
 
 
+def _download_competitions_file(owner: str, repo: str, ref: str, subpath: str) -> None:
+    relative_parts = [p for p in [subpath, "competitions.json"] if p]
+    if not relative_parts:
+        return
+
+    repo_path = "/".join(relative_parts)
+    if COMPETITIONS_PATH.exists():
+        return
+
+    try:
+        data = _get_bytes(_raw_url(owner, repo, ref, repo_path))
+    except Exception as exc:  # pragma: no cover - network failures
+        logger.debug("Unable to download competitions.json: %s", exc)
+        return
+
+    COMPETITIONS_PATH.write_bytes(data)
+
+
+def _download_matches_files(
+    owner: str,
+    repo: str,
+    ref: str,
+    subpath: str,
+    competition_filters: Set[str],
+) -> None:
+    matches_subpath = "/".join([p for p in [subpath, "matches"] if p])
+    match_repo_paths = _list_events_with_trees_api(owner, repo, ref, matches_subpath)
+    if not match_repo_paths:
+        return
+
+    match_repo_paths.sort()
+
+    for rel_path in tqdm(match_repo_paths, desc="Downloading matches", unit="file"):
+        relative_match = _relative_to_folder(rel_path, "matches")
+        parts = relative_match.parts
+        if parts and parts[0] not in competition_filters:
+            continue
+
+        local_path = MATCHES_DIR / relative_match
+        if local_path.exists():
+            continue
+
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            local_path.write_bytes(_get_bytes(_raw_url(owner, repo, ref, rel_path)))
+        except Exception as exc:  # pragma: no cover - network failures
+            logger.debug("Unable to download match file %s: %s", rel_path, exc)
+
+
 def _download_dataset_from_zip(
-    owner: str, repo: str, ref: str, subpath: str, limit: Optional[int]
+    owner: str,
+    repo: str,
+    ref: str,
+    subpath: str,
+    limit: Optional[int],
 ) -> Tuple[List[Path], List[Path]]:
     zip_url = f"https://codeload.github.com/{owner}/{repo}/zip/refs/heads/{ref}"
     data = _get_bytes(zip_url)
@@ -120,6 +187,7 @@ def _download_dataset_from_zip(
         base_parts = [p for p in subpath.strip("/").split("/") if p]
         events_prefix = prefix + "/".join(base_parts + ["events"]).rstrip("/") + "/"
         lineups_prefix = prefix + "/".join(base_parts + ["lineups"]).rstrip("/") + "/"
+        matches_prefix = prefix + "/".join(base_parts + ["matches"]).rstrip("/") + "/"
 
         event_names = [
             name
@@ -142,6 +210,8 @@ def _download_dataset_from_zip(
             if name.startswith(lineups_prefix) and name.endswith(".json")
         }
 
+        competition_ids: Set[str] = set()
+
         local_event_paths: List[Path] = []
         new_event_paths: List[Path] = []
 
@@ -150,6 +220,10 @@ def _download_dataset_from_zip(
             relative_path = _relative_to_folder(relative, "events")
             local_path = EVENTS_DIR / relative_path
             local_event_paths.append(local_path)
+
+            parts = relative_path.parts
+            if parts:
+                competition_ids.add(parts[0])
 
             if not local_path.exists():
                 local_path.parent.mkdir(parents=True, exist_ok=True)
@@ -164,6 +238,31 @@ def _download_dataset_from_zip(
                 if not lineup_local.exists():
                     lineup_local.parent.mkdir(parents=True, exist_ok=True)
                     lineup_local.write_bytes(archive.read(lineup_name))
+
+        if competition_ids:
+            match_names = [
+                name
+                for name in archive.namelist()
+                if name.startswith(matches_prefix) and name.endswith(".json")
+            ]
+
+            for match_name in tqdm(match_names, desc="Extracting matches", unit="file"):
+                relative = match_name[len(prefix) :]
+                relative_path = _relative_to_folder(relative, "matches")
+                parts = relative_path.parts
+                if parts and parts[0] not in competition_ids:
+                    continue
+
+                local_match = MATCHES_DIR / relative_path
+                if local_match.exists():
+                    continue
+
+                local_match.parent.mkdir(parents=True, exist_ok=True)
+                local_match.write_bytes(archive.read(match_name))
+
+        competitions_name = prefix + "/".join(base_parts + ["competitions.json"])
+        if competitions_name in archive.namelist() and not COMPETITIONS_PATH.exists():
+            COMPETITIONS_PATH.write_bytes(archive.read(competitions_name))
 
     return local_event_paths, new_event_paths
 
