@@ -6,7 +6,7 @@ import os
 import shutil
 import ssl
 import subprocess
-from typing import Optional
+from typing import Mapping, Optional
 from urllib.request import Request, urlopen
 
 
@@ -21,20 +21,20 @@ def _ssl_context() -> ssl.SSLContext:
         return ssl.create_default_context()
 
 
-def _headers(extra: Optional[dict] = None) -> dict:
+def _headers(extra: Optional[Mapping[str, str]] = None) -> dict:
     hdrs = {"User-Agent": "xgoal-tutor/ingest"}
     token = os.environ.get("GITHUB_TOKEN")
     if token:
         hdrs["Authorization"] = f"Bearer {token}"
     if extra:
-        hdrs.update(extra)
+        hdrs.update(dict(extra))
     return hdrs
 
 
-def _get_bytes(url: str) -> bytes:
+def _get_bytes(url: str, *, headers: Optional[Mapping[str, str]] = None) -> bytes:
     """GET bytes with urllib; on error, try curl once (helps on macOS)."""
 
-    req = Request(url, headers=_headers())
+    req = Request(url, headers=_headers(headers))
     try:
         with contextlib.closing(urlopen(req, context=_ssl_context(), timeout=30)) as resp:
             if resp.status != 200:
@@ -44,8 +44,12 @@ def _get_bytes(url: str) -> bytes:
         curl = shutil.which("curl")
         if curl:
             try:
+                cmd = [curl, "-fsSL", "--retry", "3", url]
+                if headers:
+                    for key, value in headers.items():
+                        cmd.extend(["-H", f"{key}: {value}"])
                 return subprocess.check_output(
-                    [curl, "-fsSL", "--retry", "3", url],
+                    cmd,
                     stderr=subprocess.STDOUT,
                 )
             except subprocess.CalledProcessError:

@@ -6,14 +6,35 @@ import json
 import logging
 import shutil
 import tarfile
-import sys
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Iterator
+from typing import Iterable, Iterator, List
 from urllib.request import Request, urlopen
 
-from tqdm import tqdm
+try:  # pragma: no cover - exercised in integration scenarios
+    from tqdm import tqdm
+except Exception:  # pragma: no cover - fallback when tqdm isn't available
+    class _DummyTqdm:
+        def __init__(self, iterable=None, **_kwargs):
+            self._iterable = iterable
+
+        def __iter__(self):
+            if self._iterable is None:
+                return iter(())
+            return iter(self._iterable)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def update(self, *_args, **_kwargs):
+            return None
+
+    def tqdm(*args, **kwargs):
+        return _DummyTqdm(*args, **kwargs)
 
 from xgoal_tutor.etl.http_helper import _get_bytes, _get_json, _headers, _ssl_context
 
@@ -100,6 +121,72 @@ def download_github_directory_jsons(owner: str, repo: str, ref: str, subpath: st
         yield Path(tmp.name)
 
 
+def materialize_github_subtrees(
+    owner: str,
+    repo: str,
+    ref: str,
+    subpaths: Iterable[str],
+    dest_root: Path,
+) -> List[Path]:
+    """Download a GitHub repository ZIP archive and extract specific subpaths.
+
+    Parameters
+    ----------
+    owner, repo, ref:
+        Identify the repository and revision to download.
+    subpaths:
+        Iterable of directory prefixes (relative to the repo root) that should be
+        extracted into ``dest_root``.
+    dest_root:
+        Directory where the extracted files should be written. The function
+        creates directories as needed and only writes JSON blobs.
+
+    Returns
+    -------
+    List[Path]
+        The local directories corresponding to each requested subpath, in the
+        same order as provided.
+    """
+
+    dest_root.mkdir(parents=True, exist_ok=True)
+
+    normalized = [sp.strip("/") for sp in subpaths]
+    prefix_map = {sp: f"{repo}-{ref}/{sp}/" for sp in normalized}
+    created: dict[str, Path] = {}
+
+    for sp in normalized:
+        (dest_root / sp).mkdir(parents=True, exist_ok=True)
+
+    zip_url = f"https://codeload.github.com/{owner}/{repo}/zip/refs/heads/{ref}"
+    data = _get_bytes(zip_url)
+    zf = zipfile.ZipFile(io.BytesIO(data))
+
+    for name in zf.namelist():
+        if not name.endswith(".json"):
+            continue
+
+        for key, prefix in prefix_map.items():
+            if not name.startswith(prefix):
+                continue
+
+            relative = name[len(prefix) :].strip("/")
+            if not relative:
+                continue
+
+            target_dir = dest_root / key
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target = target_dir / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+
+            with zf.open(name) as src, target.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+
+            created.setdefault(key, target_dir)
+            break
+
+    return [created.get(sp, dest_root / sp) for sp in normalized]
+
+
 def _stream_tarball_events(owner: str, repo: str, ref: str, subpath: str) -> Iterator[Path]:
     tar_url = f"https://codeload.github.com/{owner}/{repo}/tar.gz/{ref}"
     req = Request(tar_url, headers=_headers())
@@ -143,5 +230,6 @@ __all__ = [
     "_list_events_with_trees_api",
     "_raw_url",
     "_stream_tarball_events",
+    "materialize_github_subtrees",
 ]
 
