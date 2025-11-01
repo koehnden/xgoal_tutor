@@ -5,12 +5,32 @@ import hashlib
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 from xgoal_tutor.etl.schema import CREATE_INDEX_STATEMENTS, CREATE_TABLE_STATEMENTS, SHOT_COLUMNS
 
 MutableEvent = MutableMapping[str, Any]
 LineupRow = Dict[str, Any]
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_UNPROCESSED_ROOT = _REPO_ROOT / "data" / "unprocessed"
+_DEFAULT_MATCHES_ROOT = _UNPROCESSED_ROOT / "matches"
+_DEFAULT_COMPETITIONS_FILE = _UNPROCESSED_ROOT / "competitions.json"
+
+_MATCH_METADATA_CACHE: Dict[int, Dict[str, Any]] = {}
+_MATCHES_FILE_CACHE: Dict[Path, List[Mapping[str, Any]]] = {}
+_COMPETITIONS_INDEX_CACHE: Dict[Path, Dict[Tuple[int, Optional[int]], Dict[str, Optional[str]]]] = {}
 
 
 def load_match_events(
@@ -27,6 +47,7 @@ def load_match_events(
     match_id = _determine_match_id(events)
     lineups = _read_match_lineups(events_path, match_id)
     teams, players, matches = _collect_reference_data(events, match_teams, lineups)
+    _enrich_matches_with_external_metadata(matches, events_path, events)
 
     if connection is None:
         with sqlite3.connect(db_path) as owned_connection:
@@ -230,6 +251,380 @@ def _collect_reference_data(
 
     return teams, players, matches
 
+
+def _enrich_matches_with_external_metadata(
+    matches: Dict[int, Dict[str, Any]],
+    events_path: Path,
+    events: Sequence[MutableEvent],
+) -> None:
+    if not matches:
+        return
+
+    context = _extract_match_context(events)
+
+    for match_id, record in matches.items():
+        metadata = _lookup_match_metadata(match_id, events_path, context)
+
+        competition_id = metadata.get("competition_id") or context.get("competition_id")
+        season_id = metadata.get("season_id") or context.get("season_id")
+        competition_details: Optional[Dict[str, Optional[str]]] = None
+
+        if record.get("competition_name") is None:
+            competition_name = metadata.get("competition_name") or context.get(
+                "competition_name"
+            )
+            if not competition_name and competition_id is not None:
+                competition_details = _lookup_competition_details(
+                    events_path, competition_id, season_id
+                )
+                competition_name = competition_details.get("competition_name")
+            if competition_name:
+                record["competition_name"] = competition_name
+
+        if record.get("season_name") is None:
+            season_name = metadata.get("season_name") or context.get("season_name")
+            if not season_name and competition_id is not None:
+                if competition_details is None:
+                    competition_details = _lookup_competition_details(
+                        events_path, competition_id, season_id
+                    )
+                season_name = competition_details.get("season_name") if competition_details else None
+            if season_name:
+                record["season_name"] = season_name
+
+        if record.get("match_date") is None:
+            match_date = metadata.get("match_date")
+            if match_date:
+                record["match_date"] = match_date
+
+        if record.get("venue") is None:
+            venue = metadata.get("venue")
+            if venue:
+                record["venue"] = venue
+
+
+def _extract_match_context(events: Sequence[MutableEvent]) -> Dict[str, Any]:
+    competition_id: Optional[int] = None
+    competition_name: Optional[str] = None
+    season_id: Optional[int] = None
+    season_name: Optional[str] = None
+
+    for event in events:
+        competition_info = event.get("competition")
+        if isinstance(competition_info, Mapping):
+            if competition_id is None:
+                competition_id = _get_int(
+                    competition_info.get("competition_id")
+                ) or _get_int(competition_info.get("id"))
+            if not competition_name:
+                competition_name = _get_str(
+                    competition_info.get("competition_name")
+                ) or _get_str(competition_info.get("name"))
+
+        season_info = event.get("season")
+        if isinstance(season_info, Mapping):
+            if season_id is None:
+                season_id = _get_int(season_info.get("season_id")) or _get_int(
+                    season_info.get("id")
+                )
+            if not season_name:
+                season_name = _get_str(season_info.get("season_name")) or _get_str(
+                    season_info.get("name")
+                )
+
+        if (
+            competition_id is not None
+            and competition_name
+            and season_id is not None
+            and season_name
+        ):
+            break
+
+    return {
+        "competition_id": competition_id,
+        "competition_name": competition_name,
+        "season_id": season_id,
+        "season_name": season_name,
+    }
+
+
+def _lookup_match_metadata(
+    match_id: int,
+    events_path: Path,
+    context: Mapping[str, Any],
+) -> Dict[str, Any]:
+    cached = _MATCH_METADATA_CACHE.get(match_id)
+    if cached is not None:
+        return cached
+
+    competition_id = _get_int(context.get("competition_id"))
+    season_id = _get_int(context.get("season_id"))
+
+    for candidate in _iter_possible_match_files(events_path, competition_id, season_id):
+        entry = _find_match_entry(candidate, match_id)
+        if entry is None:
+            continue
+        metadata = _normalise_match_metadata(entry)
+        metadata.setdefault("competition_id", competition_id)
+        metadata.setdefault("season_id", season_id)
+        _MATCH_METADATA_CACHE[match_id] = metadata
+        return metadata
+
+    metadata = {
+        "competition_id": competition_id,
+        "season_id": season_id,
+    }
+    _MATCH_METADATA_CACHE[match_id] = metadata
+    return metadata
+
+
+def _iter_possible_match_files(
+    events_path: Path,
+    competition_id: Optional[int],
+    season_id: Optional[int],
+) -> Iterable[Path]:
+    seen: Set[Path] = set()
+
+    for base in _candidate_matches_roots(events_path):
+        if competition_id is not None and season_id is not None:
+            candidate = base / str(competition_id) / f"{season_id}.json"
+            resolved = candidate
+            try:
+                resolved = candidate.resolve()
+            except FileNotFoundError:
+                resolved = candidate
+            if resolved not in seen:
+                seen.add(resolved)
+                yield resolved
+
+        if competition_id is not None:
+            competition_dir = base / str(competition_id)
+            if competition_dir.is_dir():
+                for path in sorted(competition_dir.glob("*.json")):
+                    resolved = path
+                    try:
+                        resolved = path.resolve()
+                    except FileNotFoundError:
+                        resolved = path
+                    if resolved in seen:
+                        continue
+                    seen.add(resolved)
+                    yield resolved
+            continue
+
+        if base.is_dir():
+            for path in sorted(base.rglob("*.json")):
+                resolved = path
+                try:
+                    resolved = path.resolve()
+                except FileNotFoundError:
+                    resolved = path
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                yield resolved
+
+
+def _candidate_matches_roots(events_path: Path) -> List[Path]:
+    candidates: List[Path] = []
+    try:
+        resolved = events_path.resolve()
+    except FileNotFoundError:
+        resolved = events_path
+
+    parts = list(resolved.parts)
+    for idx, part in enumerate(parts):
+        if part == "events":
+            base = Path(*parts[:idx]) / "matches"
+            candidates.append(base)
+
+    candidates.append(_DEFAULT_MATCHES_ROOT)
+    return _dedupe_paths(candidates)
+
+
+def _dedupe_paths(paths: Iterable[Path]) -> List[Path]:
+    unique: List[Path] = []
+    seen: Set[Path] = set()
+
+    for path in paths:
+        try:
+            resolved = path.resolve()
+        except FileNotFoundError:
+            resolved = path
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique.append(resolved)
+
+    return unique
+
+
+def _find_match_entry(path: Path, match_id: int) -> Optional[Mapping[str, Any]]:
+    if not path.exists():
+        return None
+
+    for entry in _read_matches_file(path):
+        candidate_id = _get_int(entry.get("match_id"))
+        if candidate_id == match_id:
+            return entry
+    return None
+
+
+def _read_matches_file(path: Path) -> List[Mapping[str, Any]]:
+    cached = _MATCHES_FILE_CACHE.get(path)
+    if cached is not None:
+        return cached
+
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        _MATCHES_FILE_CACHE[path] = []
+        return []
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        _MATCHES_FILE_CACHE[path] = []
+        return []
+
+    results: List[Mapping[str, Any]] = []
+    if isinstance(data, Sequence):
+        for item in data:
+            if isinstance(item, Mapping):
+                results.append(dict(item))
+
+    _MATCHES_FILE_CACHE[path] = results
+    return results
+
+
+def _normalise_match_metadata(entry: Mapping[str, Any]) -> Dict[str, Any]:
+    metadata: Dict[str, Any] = {}
+
+    metadata["competition_id"] = _get_nested_int(entry, ("competition", "competition_id")) or _get_nested_int(
+        entry, ("competition", "id")
+    )
+    metadata["competition_name"] = _get_nested_str(
+        entry, ("competition", "competition_name")
+    ) or _get_nested_str(entry, ("competition", "name"))
+    metadata["season_id"] = _get_nested_int(entry, ("season", "season_id")) or _get_nested_int(
+        entry, ("season", "id")
+    )
+    metadata["season_name"] = _get_nested_str(entry, ("season", "season_name")) or _get_nested_str(
+        entry, ("season", "name")
+    )
+    metadata["match_date"] = _get_str(entry.get("match_date")) or _get_str(
+        entry.get("kick_off")
+    )
+
+    venue = entry.get("venue")
+    normalised_venue: Optional[str] = None
+    if isinstance(venue, Mapping):
+        normalised_venue = _get_nested_str(venue, ("name",))
+    else:
+        normalised_venue = _get_str(venue)
+
+    if not normalised_venue:
+        stadium = entry.get("stadium")
+        if isinstance(stadium, Mapping):
+            normalised_venue = _get_nested_str(stadium, ("name",))
+        else:
+            normalised_venue = _get_str(stadium)
+
+    if normalised_venue:
+        metadata["venue"] = normalised_venue
+
+    return metadata
+
+
+def _lookup_competition_details(
+    events_path: Path,
+    competition_id: int,
+    season_id: Optional[int],
+) -> Dict[str, Optional[str]]:
+    index = _load_competitions_index(events_path)
+    if not index:
+        return {}
+
+    if (competition_id, season_id) in index:
+        return index[(competition_id, season_id)]
+
+    if season_id is not None and (competition_id, None) in index:
+        return index[(competition_id, None)]
+
+    for (comp_id, _season_id), details in index.items():
+        if comp_id == competition_id:
+            return details
+
+    return {}
+
+
+def _load_competitions_index(
+    events_path: Path,
+) -> Dict[Tuple[int, Optional[int]], Dict[str, Optional[str]]]:
+    candidates = _candidate_competitions_paths(events_path)
+
+    for candidate in candidates:
+        cached = _COMPETITIONS_INDEX_CACHE.get(candidate)
+        if cached is not None:
+            if cached:
+                return cached
+            continue
+
+        try:
+            raw = candidate.read_text(encoding="utf-8")
+        except OSError:
+            _COMPETITIONS_INDEX_CACHE[candidate] = {}
+            continue
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            _COMPETITIONS_INDEX_CACHE[candidate] = {}
+            continue
+
+        index: Dict[Tuple[int, Optional[int]], Dict[str, Optional[str]]] = {}
+        if isinstance(data, Sequence):
+            for entry in data:
+                if not isinstance(entry, Mapping):
+                    continue
+                competition_id = _get_int(entry.get("competition_id")) or _get_int(
+                    entry.get("id")
+                )
+                if competition_id is None:
+                    continue
+                season_id = _get_int(entry.get("season_id"))
+                competition_name = _get_str(entry.get("competition_name")) or _get_str(
+                    entry.get("name")
+                )
+                season_name = _get_str(entry.get("season_name"))
+                index[(competition_id, season_id)] = {
+                    "competition_name": competition_name,
+                    "season_name": season_name,
+                }
+
+        _COMPETITIONS_INDEX_CACHE[candidate] = index
+        if index:
+            return index
+
+    return {}
+
+
+def _candidate_competitions_paths(events_path: Path) -> List[Path]:
+    candidates: List[Path] = []
+
+    try:
+        resolved = events_path.resolve()
+    except FileNotFoundError:
+        resolved = events_path
+
+    parts = list(resolved.parts)
+    for idx, part in enumerate(parts):
+        if part == "events":
+            base = Path(*parts[:idx])
+            candidates.append(base / "competitions.json")
+
+    candidates.append(_DEFAULT_COMPETITIONS_FILE)
+    return _dedupe_paths(candidates)
 
 def _record_team(store: MutableMapping[int, str], data: Any) -> None:
     if not isinstance(data, Mapping):

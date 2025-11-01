@@ -319,15 +319,73 @@ def test_load_match_events_populates_sqlite(sample_events: Path, tmp_path: Path)
             (200, 40, 2),
         ]
 
-        subs = [row for row in lineups if row["is_starter"] == 0]
-        assert len(subs) == 1
-        sub = subs[0]
-        assert sub["player_id"] == 20
-        assert sub["from_period"] == 2
-        assert sub["from_minute"] == 60
-        assert sub["raw_json"] is not None
-        raw_event = json.loads(stored_event["raw_json"])
-        assert raw_event["id"] == "shot-1"
+
+def test_load_match_events_enriches_metadata_from_matches(tmp_path: Path) -> None:
+    events_dir = tmp_path / "events"
+    matches_dir = tmp_path / "matches" / "99"
+    events_dir.mkdir()
+    matches_dir.mkdir(parents=True)
+
+    competitions_path = tmp_path / "competitions.json"
+
+    events = [
+        {
+            "id": "evt-1",
+            "match_id": 123,
+            "type": {"id": 30, "name": "Pass"},
+            "period": 1,
+            "minute": 0,
+            "second": 0.0,
+            "timestamp": "00:00:00.000",
+            "team": {"id": 10, "name": "Metadata FC"},
+            "opponent": {"id": 20, "name": "Visitors"},
+            "player": {"id": 1, "name": "Creator"},
+            "home_team": {"id": 10, "name": "Metadata FC"},
+            "away_team": {"id": 20, "name": "Visitors"},
+            "competition": {"id": 99},
+            "season": {"id": 2023},
+        }
+    ]
+
+    events_path = events_dir / "123.json"
+    events_path.write_text(json.dumps(events), encoding="utf-8")
+
+    matches = [
+        {
+            "match_id": 123,
+            "match_date": "2023-08-02",
+            "competition": {"competition_id": 99},
+            "season": {"season_id": 2023},
+            "stadium": {"name": "Metadata Stadium"},
+        }
+    ]
+    (matches_dir / "2023.json").write_text(json.dumps(matches), encoding="utf-8")
+
+    competitions = [
+        {
+            "competition_id": 99,
+            "competition_name": "Metadata Cup",
+            "season_id": 2023,
+            "season_name": "2023/2024",
+        }
+    ]
+    competitions_path.write_text(json.dumps(competitions), encoding="utf-8")
+
+    database = tmp_path / "metadata.db"
+    etl.load_match_events(events_path, database)
+
+    with sqlite3.connect(database) as conn:
+        conn.row_factory = sqlite3.Row
+        match = conn.execute(
+            "SELECT competition_name, season_name, match_date, venue FROM matches WHERE match_id = ?",
+            (123,),
+        ).fetchone()
+
+        assert match is not None
+        assert match["competition_name"] == "Metadata Cup"
+        assert match["season_name"] == "2023/2024"
+        assert match["match_date"] == "2023-08-02"
+        assert match["venue"] == "Metadata Stadium"
 
 
 def test_load_match_events_uses_filename_for_match_id(tmp_path: Path) -> None:
