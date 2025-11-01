@@ -12,6 +12,116 @@ from xgoal_tutor.etl.schema import CREATE_INDEX_STATEMENTS, CREATE_TABLE_STATEME
 MutableEvent = MutableMapping[str, Any]
 LineupRow = Dict[str, Any]
 
+_MATCH_METADATA_CACHE: Dict[Path, Dict[int, Dict[str, Any]]] = {}
+_COMPETITIONS_CACHE: Dict[Path, Dict[Tuple[int, int], Dict[str, Any]]] = {}
+
+
+def _locate_dataset_root(events_path: Path) -> Optional[Path]:
+    for parent in events_path.parents:
+        if parent.name == "events":
+            return parent.parent
+    return None
+
+
+def _load_competitions_lookup(root: Path) -> Dict[Tuple[int, int], Dict[str, Any]]:
+    cached = _COMPETITIONS_CACHE.get(root)
+    if cached is not None:
+        return cached
+
+    path = root / "competitions.json"
+    lookup: Dict[Tuple[int, int], Dict[str, Any]] = {}
+
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        _COMPETITIONS_CACHE[root] = lookup
+        return lookup
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        _COMPETITIONS_CACHE[root] = lookup
+        return lookup
+
+    if isinstance(data, Sequence):
+        for entry in data:
+            if not isinstance(entry, Mapping):
+                continue
+            competition_id = _get_int(entry.get("competition_id"))
+            season_id = _get_int(entry.get("season_id"))
+            if competition_id is None or season_id is None:
+                continue
+            lookup[(competition_id, season_id)] = dict(entry)
+
+    _COMPETITIONS_CACHE[root] = lookup
+    return lookup
+
+
+def _load_match_metadata_for_root(root: Path) -> Dict[int, Dict[str, Any]]:
+    cached = _MATCH_METADATA_CACHE.get(root)
+    if cached is not None:
+        return cached
+
+    matches_dir = root / "matches"
+    metadata: Dict[int, Dict[str, Any]] = {}
+    competitions = _load_competitions_lookup(root)
+
+    if matches_dir.is_dir():
+        for json_path in sorted(matches_dir.rglob("*.json")):
+            try:
+                raw = json_path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+
+            entries: Sequence[Any]
+            if isinstance(data, Sequence):
+                entries = data
+            elif isinstance(data, Mapping):
+                entries = [data]
+            else:
+                continue
+
+            for entry in entries:
+                if not isinstance(entry, Mapping):
+                    continue
+                match_id = _get_int(entry.get("match_id"))
+                if match_id is None or match_id in metadata:
+                    continue
+
+                record = dict(entry)
+                competition_id = _get_nested_int(record, ("competition", "competition_id"))
+                if competition_id is None:
+                    competition_id = _get_int(record.get("competition_id"))
+                season_id = _get_nested_int(record, ("season", "season_id"))
+                if season_id is None:
+                    season_id = _get_int(record.get("season_id"))
+
+                if (
+                    competition_id is not None
+                    and season_id is not None
+                    and (competition_id, season_id) in competitions
+                ):
+                    comp_entry = competitions[(competition_id, season_id)]
+                    competition_name = _get_str(
+                        comp_entry.get("competition_name") or comp_entry.get("name")
+                    )
+                    if competition_name and not record.get("competition_name"):
+                        record["competition_name"] = competition_name
+
+                    season_name = _get_str(comp_entry.get("season_name"))
+                    if season_name and not record.get("season_name"):
+                        record["season_name"] = season_name
+
+                metadata[match_id] = record
+
+    _MATCH_METADATA_CACHE[root] = metadata
+    return metadata
+
 
 def load_match_events(
     events_path: Path, db_path: Path, *, connection: Optional[sqlite3.Connection] = None
@@ -26,7 +136,23 @@ def load_match_events(
     match_teams = _derive_match_teams(events)
     match_id = _determine_match_id(events)
     lineups = _read_match_lineups(events_path, match_id)
-    teams, players, matches = _collect_reference_data(events, match_teams, lineups)
+    dataset_root = _locate_dataset_root(events_path.resolve())
+    match_metadata: Dict[int, Dict[str, Any]] = {}
+    if dataset_root is not None:
+        metadata_lookup = _load_match_metadata_for_root(dataset_root)
+        if metadata_lookup:
+            relevant_ids = set(match_teams.keys())
+            if match_id is not None:
+                relevant_ids.add(match_id)
+            match_metadata = {
+                mid: metadata_lookup[mid]
+                for mid in relevant_ids
+                if mid in metadata_lookup
+            }
+
+    teams, players, matches = _collect_reference_data(
+        events, match_teams, lineups, match_metadata
+    )
 
     if connection is None:
         with sqlite3.connect(db_path) as owned_connection:
@@ -124,10 +250,12 @@ def _collect_reference_data(
     events: Sequence[MutableEvent],
     match_teams: Mapping[int, Set[int]],
     lineups: Sequence[LineupRow],
+    match_metadata: Optional[Mapping[int, Mapping[str, Any]]] = None,
 ) -> Tuple[Dict[int, str], Dict[int, str], Dict[int, Dict[str, Any]]]:
     teams: Dict[int, str] = {}
     players: Dict[int, str] = {}
     matches: Dict[int, Dict[str, Any]] = {}
+    metadata_lookup = match_metadata or {}
 
     for event in events:
         _record_team(teams, event.get("team"))
@@ -192,6 +320,10 @@ def _collect_reference_data(
         if stadium_name and not match_record["venue"]:
             match_record["venue"] = stadium_name
 
+        metadata = metadata_lookup.get(match_id)
+        if metadata:
+            _apply_match_metadata(match_record, metadata)
+
         for key, team_slot in (("home_team", "home"), ("away_team", "away")):
             team_info = event.get(key)
             if isinstance(team_info, Mapping):
@@ -229,6 +361,61 @@ def _collect_reference_data(
             players.setdefault(player_id, player_name)
 
     return teams, players, matches
+
+
+def _apply_match_metadata(record: Dict[str, Any], metadata: Mapping[str, Any]) -> None:
+    competition_name = (
+        _get_nested_str(metadata, ("competition", "competition_name"))
+        or _get_nested_str(metadata, ("competition", "name"))
+        or _get_str(metadata.get("competition_name"))
+    )
+    if competition_name and not record["competition_name"]:
+        record["competition_name"] = competition_name
+
+    season_name = (
+        _get_nested_str(metadata, ("season", "season_name"))
+        or _get_nested_str(metadata, ("season", "name"))
+        or _get_str(metadata.get("season_name"))
+    )
+    if season_name and not record["season_name"]:
+        record["season_name"] = season_name
+
+    match_date = metadata.get("match_date") or _get_nested_str(metadata, ("match", "match_date"))
+    if match_date and not record["match_date"]:
+        record["match_date"] = _get_str(match_date)
+
+    venue = (
+        _get_nested_str(metadata, ("stadium", "name"))
+        or _get_nested_str(metadata, ("venue", "name"))
+        or _get_str(metadata.get("stadium_name"))
+        or _get_str(metadata.get("venue"))
+    )
+    if venue and not record["venue"]:
+        record["venue"] = venue
+
+    for team_key, slot in (("home_team", "home"), ("away_team", "away")):
+        team_info = metadata.get(team_key)
+        if not isinstance(team_info, Mapping):
+            continue
+
+        team_id = _get_int(team_info.get("team_id"))
+        if team_id is None:
+            team_id = _get_int(team_info.get("id"))
+        team_name = _get_str(team_info.get("team_name")) or _get_str(team_info.get("name"))
+
+        if slot == "home":
+            if team_id is not None and record["home_team_id"] is None:
+                record["home_team_id"] = team_id
+            if team_name and not record["home_team_name"]:
+                record["home_team_name"] = team_name
+        else:
+            if team_id is not None and record["away_team_id"] is None:
+                record["away_team_id"] = team_id
+            if team_name and not record["away_team_name"]:
+                record["away_team_name"] = team_name
+
+        if team_id is not None and team_name:
+            record.setdefault("_team_names", {}).setdefault(team_id, team_name)
 
 
 def _record_team(store: MutableMapping[int, str], data: Any) -> None:
