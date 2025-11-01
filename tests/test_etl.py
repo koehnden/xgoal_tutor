@@ -1,12 +1,50 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import sqlite3
 from pathlib import Path
 
 import pytest
 
 from xgoal_tutor import etl
+
+
+def _load_ingest_cli():
+    import sys
+    import types
+
+    if "tqdm" not in sys.modules:
+        class _DummyTqdm:
+            def __init__(self, iterable=None, **_kwargs):
+                self._iterable = iterable
+
+            def __iter__(self):
+                if self._iterable is None:
+                    return iter(())
+                return iter(self._iterable)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def update(self, *_args, **_kwargs):
+                return None
+
+        sys.modules["tqdm"] = types.SimpleNamespace(
+            tqdm=lambda *args, **kwargs: _DummyTqdm(*args, **kwargs)
+        )
+
+    spec = importlib.util.spec_from_file_location(
+        "ingest_statsbomb_cli",
+        Path(__file__).resolve().parents[1] / "scripts" / "ingest_statsbomb.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 @pytest.fixture()
@@ -330,6 +368,76 @@ def test_load_match_events_populates_sqlite(sample_events: Path, tmp_path: Path)
         assert raw_event["id"] == "shot-1"
 
 
+def test_load_match_events_downloads_lineups_when_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+
+    events_path = events_dir / "456.json"
+    events = [
+        {
+            "id": "evt-1",
+            "type": {"name": "Pass"},
+            "team": {"id": 1, "name": "Alpha"},
+            "player": {"id": 10, "name": "Alice"},
+            "match_id": 456,
+        }
+    ]
+    events_path.write_text(json.dumps(events), encoding="utf-8")
+
+    sample_lineups = [
+        {
+            "team_id": 1,
+            "team_name": "Alpha",
+            "lineup": [
+                {
+                    "player_id": 10,
+                    "player_name": "Alice",
+                    "jersey_number": 7,
+                    "positions": [
+                        {
+                            "position_id": 9,
+                            "position": "Forward",
+                            "from": "00:00",
+                            "to": "90:00",
+                            "start_reason": "Starting XI",
+                        }
+                    ],
+                }
+            ],
+        }
+    ]
+
+    requested = {}
+
+    import xgoal_tutor.etl.statsbomb as statsbomb_mod
+
+    def fake_get_json(url: str):
+        requested["url"] = url
+        return sample_lineups
+
+    monkeypatch.setattr(statsbomb_mod, "_get_json", fake_get_json)
+
+    database = tmp_path / "lineups.sqlite"
+    etl.load_match_events(events_path, database)
+
+    assert requested["url"].endswith("/456.json")
+
+    with sqlite3.connect(database) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT match_id, team_id, player_id, raw_json FROM match_lineups"
+        ).fetchall()
+
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["match_id"] == 456
+        assert row["team_id"] == 1
+        assert row["player_id"] == 10
+        assert json.loads(row["raw_json"])["player_name"] == "Alice"
+
+
 def test_load_match_events_uses_filename_for_match_id(tmp_path: Path) -> None:
     events = [
         {
@@ -372,3 +480,37 @@ def test_main_invokes_loader(monkeypatch: pytest.MonkeyPatch, sample_events: Pat
     etl.main([str(sample_events), str(database)])
 
     assert called["args"] == (sample_events, database)
+
+
+def test_ingest_limit_only_processes_requested_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events_dir = tmp_path / "batch"
+    events_dir.mkdir()
+
+    for idx in range(3):
+        event = [
+            {
+                "id": f"event-{idx}",
+                "type": {"name": "Pass"},
+                "team": {"id": idx, "name": f"Team {idx}"},
+                "player": {"id": idx, "name": f"Player {idx}"},
+                "match_id": idx + 1,
+            }
+        ]
+        (events_dir / f"{idx}.json").write_text(json.dumps(event), encoding="utf-8")
+
+    processed: list[str] = []
+
+    def fake_loader(events_path: Path, db_path: Path, connection=None) -> None:
+        processed.append(events_path.name)
+
+    ingest_cli = _load_ingest_cli()
+    monkeypatch.setattr(ingest_cli, "load_match_events", fake_loader)
+
+    db_path = tmp_path / "subset.sqlite"
+    ingest_cli.ingest([str(events_dir)], db_path, limit=2)
+
+    assert db_path.exists()
+    assert len(processed) == 2
+    assert processed == sorted(processed)

@@ -74,14 +74,29 @@ def iter_event_files(input_arg: str) -> Iterator[Path]:
     raise ValueError(f"Unsupported input: {input_arg}")
 
 
-def ingest(inputs: List[str], db_path: Path, stop_on_error: bool = False) -> None:
+def ingest(
+    inputs: List[str],
+    db_path: Path,
+    stop_on_error: bool = False,
+    limit: Optional[int] = None,
+) -> None:
     processed = 0
+    attempted = 0
     failures: List[str] = []
+    reached_limit = False
+
+    if limit is not None and limit <= 0:
+        raise ValueError("limit must be a positive integer when provided")
 
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
         for input_arg in inputs:
             for events_path in iter_event_files(input_arg):
+                if limit is not None and attempted >= limit:
+                    reached_limit = True
+                    break
+
+                attempted += 1
                 try:
                     load_match_events(events_path, db_path, connection=connection)
                     processed += 1
@@ -95,8 +110,12 @@ def ingest(inputs: List[str], db_path: Path, stop_on_error: bool = False) -> Non
                     if events_path.name.startswith("events_") and events_path.parent == Path(tempfile.gettempdir()):
                         with contextlib.suppress(Exception):
                             events_path.unlink(missing_ok=True)
+            if reached_limit:
+                break
 
     logger.info(f"\nDone. Files processed: {processed}. Database: {db_path}")
+    if reached_limit and limit is not None:
+        logger.info("Reached requested limit of %s file(s); stopping early.", limit)
     if failures:
         logger.warning("Some files failed:", *failures, sep="\n- ")
 
@@ -129,12 +148,22 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         action="store_true",
         help="Stop immediately if any file fails to load (default: continue)."
     )
+    parser.add_argument(
+        "-n",
+        "--limit",
+        type=int,
+        default=None,
+        help=(
+            "Process at most N event files. Useful for quick dry-runs of the pipeline "
+            "with a small subset of data."
+        ),
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     db_path: Path = args.database.expanduser().resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    ingest(args.input, db_path, stop_on_error=args.stop_on_error)
+    ingest(args.input, db_path, stop_on_error=args.stop_on_error, limit=args.limit)
 
 
 if __name__ == "__main__":
