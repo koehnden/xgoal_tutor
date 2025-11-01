@@ -1,50 +1,12 @@
 from __future__ import annotations
 
 import json
-import importlib.util
 import sqlite3
 from pathlib import Path
 
 import pytest
 
 from xgoal_tutor import etl
-
-
-def _load_ingest_cli():
-    import sys
-    import types
-
-    if "tqdm" not in sys.modules:
-        class _DummyTqdm:
-            def __init__(self, iterable=None, **_kwargs):
-                self._iterable = iterable
-
-            def __iter__(self):
-                if self._iterable is None:
-                    return iter(())
-                return iter(self._iterable)
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-            def update(self, *_args, **_kwargs):
-                return None
-
-        sys.modules["tqdm"] = types.SimpleNamespace(
-            tqdm=lambda *args, **kwargs: _DummyTqdm(*args, **kwargs)
-        )
-
-    spec = importlib.util.spec_from_file_location(
-        "ingest_statsbomb_cli",
-        Path(__file__).resolve().parents[1] / "scripts" / "ingest_statsbomb.py",
-    )
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
 
 
 @pytest.fixture()
@@ -483,7 +445,7 @@ def test_main_invokes_loader(monkeypatch: pytest.MonkeyPatch, sample_events: Pat
 
 
 def test_ingest_limit_only_processes_requested_files(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ingest_cli_module
 ) -> None:
     events_dir = tmp_path / "batch"
     events_dir.mkdir()
@@ -505,7 +467,7 @@ def test_ingest_limit_only_processes_requested_files(
     def fake_loader(events_path: Path, db_path: Path, connection=None) -> None:
         processed.append(events_path.name)
 
-    ingest_cli = _load_ingest_cli()
+    ingest_cli = ingest_cli_module
     monkeypatch.setattr(ingest_cli, "load_match_events", fake_loader)
 
     db_path = tmp_path / "subset.sqlite"

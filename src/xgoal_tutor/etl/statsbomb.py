@@ -8,7 +8,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
 
-from xgoal_tutor.etl.http_helper import _get_json
+from xgoal_tutor.etl.http_helper import _get_bytes, _get_json
 from xgoal_tutor.etl.schema import CREATE_INDEX_STATEMENTS, CREATE_TABLE_STATEMENTS, SHOT_COLUMNS
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,9 @@ LineupRow = Dict[str, Any]
 
 _LINEUPS_BASE_URL = (
     "https://raw.githubusercontent.com/statsbomb/open-data/master/data/lineups"
+)
+_LINEUPS_CONTENTS_API = (
+    "https://api.github.com/repos/statsbomb/open-data/contents/data/lineups"
 )
 
 
@@ -521,15 +524,46 @@ def _download_remote_lineup_data(match_id: int) -> Optional[Sequence[Any]]:
     url = f"{_LINEUPS_BASE_URL}/{match_id}.json"
     try:
         payload = _get_json(url)
+        if isinstance(payload, Sequence):
+            return payload
+        logger.warning(
+            "Unexpected data when downloading lineup for match %s from %s", match_id, url
+        )
     except Exception as exc:  # pragma: no cover - network variability
         logger.debug("Unable to download remote lineup for match %s: %s", match_id, exc)
+
+    api_url = f"{_LINEUPS_CONTENTS_API}/{match_id}.json?ref=master"
+    try:
+        raw_bytes = _get_bytes(
+            api_url,
+            headers={"Accept": "application/vnd.github.v3.raw"},
+        )
+    except Exception as exc:  # pragma: no cover - network variability
+        logger.debug(
+            "Unable to download remote lineup via contents API for match %s: %s",
+            match_id,
+            exc,
+        )
+        return None
+
+    try:
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "Invalid JSON when decoding lineup for match %s from %s: %s",
+            match_id,
+            api_url,
+            exc,
+        )
         return None
 
     if isinstance(payload, Sequence):
         return payload
 
     logger.warning(
-        "Unexpected data when downloading lineup for match %s from %s", match_id, url
+        "Unexpected data when downloading lineup for match %s from %s",
+        match_id,
+        api_url,
     )
     return None
 
