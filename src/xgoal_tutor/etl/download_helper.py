@@ -6,7 +6,6 @@ import json
 import logging
 import shutil
 import tarfile
-import sys
 import tempfile
 import zipfile
 from pathlib import Path

@@ -3,14 +3,22 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
 
+from xgoal_tutor.etl.http_helper import _get_json
 from xgoal_tutor.etl.schema import CREATE_INDEX_STATEMENTS, CREATE_TABLE_STATEMENTS, SHOT_COLUMNS
+
+logger = logging.getLogger(__name__)
 
 MutableEvent = MutableMapping[str, Any]
 LineupRow = Dict[str, Any]
+
+_LINEUPS_BASE_URL = (
+    "https://raw.githubusercontent.com/statsbomb/open-data/master/data/lineups"
+)
 
 
 def load_match_events(
@@ -448,18 +456,29 @@ def _read_match_lineups(events_path: Path, match_id: Optional[int]) -> List[Line
         return []
 
     lineup_path = _find_lineup_file(events_path)
-    if lineup_path is None:
-        return []
+    data: Optional[Sequence[Any]] = None
 
-    try:
-        raw = lineup_path.read_text(encoding="utf-8")
-    except OSError:
-        return []
+    if lineup_path is not None:
+        try:
+            raw = lineup_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.debug("Unable to read lineup file %s: %s", lineup_path, exc)
+            return []
 
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return []
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.warning("Invalid JSON in lineup file %s: %s", lineup_path, exc)
+            return []
+
+        if not isinstance(parsed, Sequence):
+            logger.warning("Unexpected lineup payload shape for %s", lineup_path)
+            return []
+        data = parsed
+    else:
+        data = _download_remote_lineup_data(match_id)
+        if data is None:
+            return []
 
     if not isinstance(data, Sequence):
         return []
@@ -496,6 +515,23 @@ def _candidate_lineup_paths(events_path: Path) -> List[Path]:
             candidates.append(Path(*new_parts))
 
     return candidates
+
+
+def _download_remote_lineup_data(match_id: int) -> Optional[Sequence[Any]]:
+    url = f"{_LINEUPS_BASE_URL}/{match_id}.json"
+    try:
+        payload = _get_json(url)
+    except Exception as exc:  # pragma: no cover - network variability
+        logger.debug("Unable to download remote lineup for match %s: %s", match_id, exc)
+        return None
+
+    if isinstance(payload, Sequence):
+        return payload
+
+    logger.warning(
+        "Unexpected data when downloading lineup for match %s from %s", match_id, url
+    )
+    return None
 
 
 def _normalise_lineup_data(data: Sequence[Any], match_id: int) -> List[LineupRow]:
