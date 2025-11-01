@@ -6,8 +6,8 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import plotly.graph_objects as go
 
-PITCH_LENGTH = 120
-PITCH_WIDTH = 80
+PITCH_LENGTH = 120.0
+PITCH_WIDTH = 80.0
 
 
 _DEF_COLOR = "#1f77b4"
@@ -22,12 +22,16 @@ _ROLE_STYLE = {
 }
 
 
-def _add_pitch_shapes(fig: go.Figure) -> None:
+def _add_pitch_shapes(fig: go.Figure, *, pitch_length: float, pitch_width: float) -> None:
     """Add common football pitch markings to the figure."""
     # Outer boundaries
-    fig.add_shape(type="rect", x0=0, y0=0, x1=PITCH_LENGTH, y1=PITCH_WIDTH, line=dict(color="#222"))
+    fig.add_shape(
+        type="rect", x0=0, y0=0, x1=pitch_length, y1=pitch_width, line=dict(color="#222")
+    )
     # Midline
-    fig.add_shape(type="line", x0=PITCH_LENGTH / 2, y0=0, x1=PITCH_LENGTH / 2, y1=PITCH_WIDTH)
+    fig.add_shape(
+        type="line", x0=pitch_length / 2, y0=0, x1=pitch_length / 2, y1=pitch_width
+    )
     # Penalty boxes
     penalty_box_length = 18
     penalty_box_width = 44
@@ -38,36 +42,42 @@ def _add_pitch_shapes(fig: go.Figure) -> None:
         x0=0,
         y0=(PITCH_WIDTH - penalty_box_width) / 2,
         x1=penalty_box_length,
-        y1=(PITCH_WIDTH + penalty_box_width) / 2,
+        y1=(pitch_width + penalty_box_width) / 2,
         line=dict(color="#444"),
     )
     fig.add_shape(
         type="rect",
-        x0=PITCH_LENGTH - penalty_box_length,
-        y0=(PITCH_WIDTH - penalty_box_width) / 2,
-        x1=PITCH_LENGTH,
-        y1=(PITCH_WIDTH + penalty_box_width) / 2,
+        x0=pitch_length - penalty_box_length,
+        y0=(pitch_width - penalty_box_width) / 2,
+        x1=pitch_length,
+        y1=(pitch_width + penalty_box_width) / 2,
         line=dict(color="#444"),
     )
     # Six-yard boxes
     fig.add_shape(
         type="rect",
         x0=0,
-        y0=(PITCH_WIDTH - six_yard_width) / 2,
+        y0=(pitch_width - six_yard_width) / 2,
         x1=six_yard_length,
-        y1=(PITCH_WIDTH + six_yard_width) / 2,
+        y1=(pitch_width + six_yard_width) / 2,
         line=dict(color="#666"),
     )
     fig.add_shape(
         type="rect",
-        x0=PITCH_LENGTH - six_yard_length,
-        y0=(PITCH_WIDTH - six_yard_width) / 2,
-        x1=PITCH_LENGTH,
-        y1=(PITCH_WIDTH + six_yard_width) / 2,
+        x0=pitch_length - six_yard_length,
+        y0=(pitch_width - six_yard_width) / 2,
+        x1=pitch_length,
+        y1=(pitch_width + six_yard_width) / 2,
         line=dict(color="#666"),
     )
     # Center circle
-    fig.add_shape(type="circle", x0=60 - 9.15, y0=40 - 9.15, x1=60 + 9.15, y1=40 + 9.15)
+    fig.add_shape(
+        type="circle",
+        x0=pitch_length / 2 - 9.15,
+        y0=pitch_width / 2 - 9.15,
+        x1=pitch_length / 2 + 9.15,
+        y1=pitch_width / 2 + 9.15,
+    )
 
 
 def _player_hover_text(player: Mapping[str, Any], team_name: str) -> str:
@@ -84,17 +94,37 @@ def create_shot_positions_figure(
     actor_id: str | None,
 ) -> go.Figure:
     """Create a football pitch visualisation of shot freeze-frame positions."""
-    fig = go.Figure()
-    _add_pitch_shapes(fig)
+    pitch_length = float(positions.get("pitch_length") or positions.get("length") or PITCH_LENGTH)
+    pitch_width = float(positions.get("pitch_width") or positions.get("width") or PITCH_WIDTH)
+    coordinate_system = positions.get("coordinate_system")
+    if isinstance(coordinate_system, Mapping):
+        pitch_length = float(coordinate_system.get("length") or pitch_length)
+        pitch_width = float(coordinate_system.get("width") or pitch_width)
 
-    items: Sequence[Mapping[str, Any]] = positions.get("items", []) if isinstance(positions, Mapping) else []
+    fig = go.Figure()
+    _add_pitch_shapes(fig, pitch_length=pitch_length, pitch_width=pitch_width)
+
+    items_source: Any = positions.get("items") if isinstance(positions, Mapping) else positions
+    items: Sequence[Mapping[str, Any]]
+    if isinstance(items_source, Sequence):
+        items = items_source  # type: ignore[assignment]
+    else:
+        items = []
     for item in items:
         if not isinstance(item, Mapping):
             continue
-        player = item.get("player", {})
+        player = item.get("player") or {}
         team_name = player.get("team", {}).get("name") or item.get("team", {}).get("name") or "Team"
         role = item.get("role")
         style = _ROLE_STYLE.get(role, {"color": "#7f7f7f", "symbol": "circle"})
+        x = item.get("x")
+        y = item.get("y")
+        if isinstance(item.get("coordinates"), Mapping):
+            coords = item["coordinates"]
+            x = coords.get("x", x)
+            y = coords.get("y", y)
+        if x is None or y is None:
+            continue
         marker = dict(
             size=12,
             color=style["color"],
@@ -104,8 +134,8 @@ def create_shot_positions_figure(
         hover_text = _player_hover_text(player, team_name)
         fig.add_trace(
             go.Scatter(
-                x=[item.get("x")],
-                y=[item.get("y")],
+                x=[x],
+                y=[y],
                 mode="markers",
                 marker=marker,
                 name=f"{team_name} ({role})" if role else team_name,
@@ -116,8 +146,8 @@ def create_shot_positions_figure(
     fig.update_layout(
         title="Freeze-frame positions",
         showlegend=True,
-        xaxis=dict(range=[0, PITCH_LENGTH], visible=False),
-        yaxis=dict(range=[0, PITCH_WIDTH], visible=False, autorange="reversed"),
+        xaxis=dict(range=[0, pitch_length], visible=False),
+        yaxis=dict(range=[0, pitch_width], visible=False, autorange="reversed"),
         margin=dict(l=10, r=10, t=40, b=10),
         height=500,
     )
