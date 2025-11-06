@@ -9,7 +9,7 @@ from typing import Iterator
 
 from fastapi import HTTPException
 
-_DB_PATH = Path(__file__).resolve().parents[3] / "data/xgoal-db.sqllite"
+_DB_PATH = Path(__file__).resolve().parents[3] / "data/statsbomb-db.sqlite"
 
 
 @contextmanager

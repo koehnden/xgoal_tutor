@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 import sqlite3
 from fastapi import HTTPException
 
-from xgoal_tutor.api._database import get_db
+from xgoal_tutor.api.database import get_db
 from xgoal_tutor.api._row_utils import as_int, int_to_bool, row_value, team_payload
 
 
