@@ -32,7 +32,7 @@ from xgoal_tutor.modeling.evaluation import compute_binary_classification_metric
 logger = logging.getLogger(__name__)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_DATABASE_PATH = (SCRIPT_DIR / "../data/xgoal-db.sqlite").resolve()
+DEFAULT_DATABASE_PATH = (SCRIPT_DIR / "../data/statsbomb-db.sqlite").resolve()
 DEFAULT_TRAIN_CSV = (SCRIPT_DIR / "../data/processed/train.csv").resolve()
 DEFAULT_TEST_CSV = (SCRIPT_DIR / "../data/processed/test.csv").resolve()
 DEFAULT_METRICS_PATH = (SCRIPT_DIR / "../results/logreg_metrics.json").resolve()

@@ -78,8 +78,8 @@ def list_matches(page: int, page_size: int) -> Dict[str, Any]:
                     COALESCE(m.home_team_name, ht.team_name) AS home_team_name,
                     COALESCE(m.away_team_name, at.team_name) AS away_team_name,
                     m.match_label,
-                    ht.short_name AS home_short_name,
-                    at.short_name AS away_short_name
+                    ht.team_name AS home_team_name,
+                    at.team_name AS away_team_name
                 FROM matches m
                 LEFT JOIN teams ht ON ht.team_id = m.home_team_id
                 LEFT JOIN teams at ON at.team_id = m.away_team_id
@@ -104,8 +104,8 @@ def list_matches(page: int, page_size: int) -> Dict[str, Any]:
                 "competition": row_value(row, "competition_name"),
                 "season": row_value(row, "season_name"),
                 "kickoff_utc": kickoff_utc,
-                "home_team": team_payload(row_value(row, "home_team_id"), home_name, row_value(row, "home_short_name")),
-                "away_team": team_payload(row_value(row, "away_team_id"), away_name, row_value(row, "away_short_name")),
+                "home_team": team_payload(row_value(row, "home_team_id"), home_name, row_value(row, "home_team_name")),
+                "away_team": team_payload(row_value(row, "away_team_id"), away_name, row_value(row, "away_team_name")),
                 "venue": row_value(row, "venue"),
                 "label": label,
             }

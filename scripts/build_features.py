@@ -22,7 +22,7 @@ from xgoal_tutor.modeling import (
 logger = logging.getLogger(__name__)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_DATABASE_PATH = (SCRIPT_DIR / "../data/xgoal-db.sqlite").resolve()
+DEFAULT_DATABASE_PATH = (SCRIPT_DIR / "../data/statsbomb-db.sqlite").resolve()
 DEFAULT_OUTPUT_DIR = (SCRIPT_DIR / "../data/processed").resolve()
 
 
