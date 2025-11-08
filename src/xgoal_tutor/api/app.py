@@ -252,7 +252,12 @@ def predict_shots(payload: ShotPredictionRequest) -> ShotPredictionResponse:
     if not payload.shots:
         raise HTTPException(status_code=400, detail="At least one shot must be provided")
 
-    predictions, contributions = generate_shot_predictions(payload.shots, payload.model)
+    try:
+        predictions, contributions = generate_shot_predictions(payload.shots)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail="Model coefficients file not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     try:
         llm_response, model_used = generate_llm_explanation(

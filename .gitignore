@@ -9,3 +9,6 @@ venv/
 # PyCharm
 .idea/
 /.vscode/
+/data/
+
+
