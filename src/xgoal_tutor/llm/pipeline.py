@@ -11,12 +11,7 @@ from xgoal_tutor.llm.models import (
     EventExplanationResult,
     ExplanationOutput,
 )
-from xgoal_tutor.llm.prompts import (
-    build_event_prompt,
-    build_match_summary_prompt,
-    build_player_summary_prompt,
-    build_team_summary_prompt,
-)
+from xgoal_tutor.prompts import load_template
 
 
 def normalize_feature_contributions(raw: Any) -> Dict[str, float]:
@@ -103,6 +98,124 @@ def _normalise_shap_values(values: Any) -> List[float]:
     raise ValueError("Unable to interpret SHAP values array")
 
 
+def build_event_prompt(
+    match_metadata: Dict[str, object],
+    event: EventExplanationInput,
+    *,
+    top_features: int,
+) -> str:
+    """Render the event-level prompt using the Markdown template."""
+
+    feature_block = _format_features(event.contributions, top_features)
+    context_block = f"Additional context: {event.context}\n" if event.context else ""
+
+    teams = match_metadata.get("teams", {}) if isinstance(match_metadata, Mapping) else {}
+    home = teams.get("home", "Home Team")
+    away = teams.get("away", "Away Team")
+    competition = match_metadata.get("competition", "")
+    season = match_metadata.get("season", "")
+
+    header_lines = [
+        "You are an analyst translating xGoal model outputs into plain football language.",
+        "Explain how the listed features influenced the shot's expected goals.",
+        "Focus on tactical insight and avoid repeating raw numbers verbatim.",
+        "Keep the explanation under 120 words and speak to a coach or tactics nerd.",
+    ]
+
+    template = load_template("event_prompt.md")
+    return template.render(
+        {
+            "header_lines": header_lines,
+            "home": home,
+            "away": away,
+            "competition": competition,
+            "season": season,
+            "minute": event.minute,
+            "second": event.second,
+            "player": event.player,
+            "team": event.team,
+            "xg": event.xg,
+            "context_block": context_block,
+            "feature_block": feature_block,
+        }
+    )
+
+
+def build_match_summary_prompt(
+    match_metadata: Dict[str, object],
+    events: Sequence[EventExplanationResult],
+) -> str:
+    """Render the match summary prompt from the Markdown template."""
+
+    teams = match_metadata.get("teams", {}) if isinstance(match_metadata, Mapping) else {}
+    home = teams.get("home", "Home Team")
+    away = teams.get("away", "Away Team")
+    competition = match_metadata.get("competition", "Competition")
+    season = match_metadata.get("season", "")
+
+    important_moments = [
+        f"{result.event.minute:02d}:{result.event.second:02d} {result.event.team} - {result.event.player}: {result.explanation}"
+        for result in events
+    ]
+
+    template = load_template("match_summary_prompt.md")
+    return template.render(
+        {
+            "home": home,
+            "away": away,
+            "competition": competition,
+            "season": season,
+            "moments": important_moments,
+        }
+    )
+
+
+def build_player_summary_prompt(
+    match_metadata: Dict[str, object],
+    events: Sequence[EventExplanationResult],
+) -> str:
+    """Render player summaries prompt from the Markdown template."""
+
+    per_player: Dict[str, List[str]] = {}
+    for result in events:
+        per_player.setdefault(result.event.player, []).append(
+            f"{result.event.minute:02d}:{result.event.second:02d} - xG {result.event.xg:.3f}: {result.explanation}"
+        )
+
+    players = [
+        {"player": player, "notes": notes}
+        for player, notes in sorted(per_player.items())
+    ]
+
+    template = load_template("player_summary_prompt.md")
+    return template.render({"players": players})
+
+
+def build_team_summary_prompt(
+    match_metadata: Dict[str, object],
+    events: Sequence[EventExplanationResult],
+) -> str:
+    """Render team summaries prompt from the Markdown template."""
+
+    per_team: Dict[str, List[str]] = {}
+    for result in events:
+        per_team.setdefault(result.event.team, []).append(
+            f"{result.event.minute:02d}:{result.event.second:02d} {result.event.player}: {result.explanation}"
+        )
+
+    teams = [
+        {"team": team, "notes": notes}
+        for team, notes in per_team.items()
+    ]
+
+    metadata_teams = match_metadata.get("teams", {}) if isinstance(match_metadata, Mapping) else {}
+    home = metadata_teams.get("home", "Home Team")
+    away = metadata_teams.get("away", "Away Team")
+
+    template = load_template("team_summary_prompt.md")
+    return template.render({"home": home, "away": away, "teams": teams})
+
+
 class ExplanationPipeline:
     """Generate natural language explanations for xGoal model outputs."""
 
@@ -181,3 +294,21 @@ class ExplanationPipeline:
             event_explanations=event_results,
             models_used=models_used,
         )
+
+
+def _format_features(contributions: Dict[str, float], top_features: int) -> str:
+    sorted_items = sorted(
+        contributions.items(),
+        key=lambda item: abs(item[1]),
+        reverse=True,
+    )
+    lines = []
+    for feature, value in sorted_items[:top_features]:
+        if value > 0:
+            direction = "higher xG"
+        elif value < 0:
+            direction = "lower xG"
+        else:
+            direction = "neutral"
+        lines.append(f"- {feature}: {value:+.3f} ({direction})")
+    return "\n".join(lines)

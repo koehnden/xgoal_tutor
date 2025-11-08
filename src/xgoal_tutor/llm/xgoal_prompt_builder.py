@@ -109,30 +109,32 @@ def build_xgoal_prompt(
     if context_section:
         feature_text = f"{feature_text}\n{context_section}" if feature_text else context_section
 
-    template = load_template("xgoal_prompt.txt")
-    prompt = template.format(
-        home=match_meta.home,
-        score_home=match_meta.score_home,
-        score_away=match_meta.score_away,
-        away=match_meta.away,
-        competition=match_meta.competition,
-        season=match_meta.season,
-        period=event_meta.period,
-        minute=event_meta.minute,
-        second=event_meta.second,
-        play_pattern=event_meta.play_pattern,
-        shooter_name=shooter_meta.name,
-        team_name=shooter_meta.team_name,
-        shooter_position=shooter_meta.position,
-        body_part=shooter_meta.body_part,
-        technique=shooter_meta.technique,
-        start_x=shooter_meta.start_x,
-        start_y=shooter_meta.start_y,
-        gk_line=goalkeeper_text,
-        attack_support_line=support_line,
-        pressure_line=pressure_line,
-        xg=xg,
-        feature_block=feature_text,
+    template = load_template("xgoal_prompt.md")
+    prompt = template.render(
+        {
+            "home": match_meta.home,
+            "score_home": match_meta.score_home,
+            "score_away": match_meta.score_away,
+            "away": match_meta.away,
+            "competition": match_meta.competition,
+            "season": match_meta.season,
+            "period": event_meta.period,
+            "minute": event_meta.minute,
+            "second": event_meta.second,
+            "play_pattern": event_meta.play_pattern,
+            "shooter_name": shooter_meta.name,
+            "team_name": shooter_meta.team_name,
+            "shooter_position": shooter_meta.position,
+            "body_part": shooter_meta.body_part,
+            "technique": shooter_meta.technique,
+            "start_x": shooter_meta.start_x,
+            "start_y": shooter_meta.start_y,
+            "gk_line": goalkeeper_text,
+            "attack_support_line": support_line,
+            "pressure_line": pressure_line,
+            "xg": xg,
+            "feature_block": feature_text,
+        }
     )
 
     return prompt
