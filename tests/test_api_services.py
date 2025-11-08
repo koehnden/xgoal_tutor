@@ -7,13 +7,13 @@ from xgoal_tutor.api.models import LogisticRegressionModel, ShotFeatures, ShotPr
 
 services = pytest.importorskip("xgoal_tutor.api.services")
 
-if not hasattr(services, "build_event_inputs"):
+if getattr(services, "__STUB__", False):
     pytest.skip("xgoal_tutor.api.services stubbed", allow_module_level=True)
 
 from xgoal_tutor.api.services import (
-    build_event_inputs,
+    _build_xgoal_prompt,
+    _format_feature_block,
     build_feature_dataframe,
-    build_llm_prompt,
     calculate_probabilities,
     generate_shot_predictions,
     group_predictions_by_match,
@@ -89,47 +89,106 @@ def test_generate_shot_predictions_returns_sorted_reason_codes():
     assert returned_features == list(sorted_by_contrib.index[: len(returned_features)])
 
 
-def test_build_event_inputs_and_prompt_for_multiple_events():
+def test_build_xgoal_prompt_renders_markdown_template(monkeypatch):
+    import sqlite3
+    from contextlib import contextmanager
+
+    connection = sqlite3.connect(":memory:")
+    connection.executescript(
+        """
+        CREATE TABLE shots (
+            shot_id TEXT PRIMARY KEY,
+            match_id INTEGER,
+            team_id INTEGER,
+            opponent_team_id INTEGER,
+            player_id INTEGER,
+            period INTEGER,
+            minute INTEGER,
+            second REAL,
+            play_pattern TEXT,
+            start_x REAL,
+            start_y REAL,
+            body_part TEXT,
+            technique TEXT,
+            statsbomb_xg REAL,
+            score_home INTEGER,
+            score_away INTEGER
+        );
+        CREATE TABLE players (player_id INTEGER PRIMARY KEY, player_name TEXT);
+        CREATE TABLE teams (team_id INTEGER PRIMARY KEY, team_name TEXT);
+        CREATE TABLE freeze_frames (
+            freeze_frame_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            shot_id TEXT,
+            player_id INTEGER,
+            player_name TEXT,
+            position_name TEXT,
+            teammate INTEGER,
+            keeper INTEGER,
+            x REAL,
+            y REAL
+        );
+        """
+    )
+
+    connection.executescript(
+        """
+        INSERT INTO teams(team_id, team_name) VALUES (1, 'Home FC'), (2, 'Away FC');
+        INSERT INTO players(player_id, player_name) VALUES (9, 'Jordan Smith');
+        INSERT INTO shots VALUES (
+            'shot-1', 10, 1, 2, 9, 1, 12, 30.0, 'open_play', 102.0, 38.0,
+            'right foot', 'volley', 0.321, 1, 0
+        );
+        INSERT INTO shots VALUES (
+            'shot-2', 10, 1, 2, 9, 1, 16, 45.0, 'fast_break', 108.0, 40.0,
+            'right foot', 'open', 0.210, 1, 0
+        );
+        INSERT INTO freeze_frames(shot_id, player_id, player_name, position_name, teammate, keeper, x, y)
+        VALUES
+            ('shot-1', 9, 'Jordan Smith', 'Striker', 1, 0, 102.0, 38.0),
+            ('shot-1', 30, 'Goalkeeper', 'Goalkeeper', 0, 1, 118.0, 40.0),
+            ('shot-2', 9, 'Jordan Smith', 'Striker', 1, 0, 108.0, 40.0),
+            ('shot-2', 31, 'Goalkeeper', 'Goalkeeper', 0, 1, 119.0, 39.5);
+        """
+    )
+
+    @contextmanager
+    def fake_get_db():
+        try:
+            yield connection
+        finally:
+            pass
+
+    monkeypatch.setattr(services, "get_db", fake_get_db)
+
     shots = [
-        ShotFeatures(
-            shot_id="shot-1",
-            match_id="match-9",
-            start_x=101.0,
-            start_y=38.0,
-            is_corner=True,
-            body_part="Head",
-        ),
-        ShotFeatures(
-            shot_id="shot-2",
-            match_id="match-9",
-            start_x=110.0,
-            start_y=32.0,
-            is_free_kick=True,
-            under_pressure=True,
-        ),
+        ShotFeatures(shot_id="shot-1", match_id="10", start_x=102.0, start_y=38.0),
+        ShotFeatures(shot_id="shot-2", match_id="10", start_x=108.0, start_y=40.0),
     ]
     predictions = [
-        ShotPrediction(shot_id="shot-1", match_id="match-9", xg=0.42, reason_codes=[]),
-        ShotPrediction(shot_id="shot-2", match_id="match-9", xg=0.18, reason_codes=[]),
+        ShotPrediction(shot_id="shot-1", match_id="10", xg=0.32, reason_codes=[]),
+        ShotPrediction(shot_id="shot-2", match_id="10", xg=0.21, reason_codes=[]),
     ]
     contributions = pd.DataFrame(
         [
-            {"dist_sb": -0.3, "angle_deg_sb": 0.2},
-            {"dist_sb": -0.15, "angle_deg_sb": 0.05, "is_free_kick": 0.1},
+            {"dist_sb": -0.30, "angle_deg_sb": 0.15},
+            {"dist_sb": -0.10, "angle_deg_sb": 0.08},
         ]
     )
 
-    events = build_event_inputs(shots, predictions, contributions)
-    assert len(events) == 2
-    assert events[0].context is not None
-    assert "Body part: Head" in events[0].context
-    assert "Traits: Corner" in events[0].context
-    assert events[1].contributions["is_free_kick"] == pytest.approx(0.1)
+    prompt = _build_xgoal_prompt(shots, predictions, contributions)
+    assert "You are a football analyst" in prompt
+    assert prompt.count("Top factors") == 2
+    assert "---" in prompt
 
-    prompt = build_llm_prompt(events, match_metadata={"teams": {"home": "Home", "away": "Away"}})
-    assert "You will receive multiple shot events" in prompt
-    assert "Player: shot-1" in prompt
-    assert "Player: shot-2" in prompt
+    connection.close()
+
+
+def test_format_feature_block_orders_by_absolute_value():
+    row = pd.Series({"dist_sb": -0.2, "angle_deg_sb": 0.05, "is_corner": 0.0})
+    lines = _format_feature_block(row)
+
+    assert lines[0].startswith("↓ dist_sb")
+    assert all("is_corner" not in line for line in lines)
 
 
 def test_group_predictions_by_match_excludes_missing_ids():

@@ -41,7 +41,7 @@ if "xgoal_tutor.api.services" not in sys.modules:  # pragma: no cover - import s
             llm_model: str | None = None,
             prompt_override: str | None = None,
         ) -> Tuple[str, str]:
-            prompt = prompt_override or "You are an analyst"
+            prompt = prompt_override or "You are a football analyst"
             return client.generate(prompt, model=llm_model)
 
         def generate_shot_predictions(shots: Any, model: Any) -> Tuple[list, _DummyContributions]:
@@ -70,10 +70,11 @@ if "xgoal_tutor.api.services" not in sys.modules:  # pragma: no cover - import s
         services_stub.generate_llm_explanation = generate_llm_explanation
         services_stub.generate_shot_predictions = generate_shot_predictions
         services_stub.group_predictions_by_match = group_predictions_by_match
+        services_stub.__STUB__ = True
         sys.modules["xgoal_tutor.api.services"] = services_stub
 
 services_module = importlib.import_module("xgoal_tutor.api.services")
-USING_SERVICES_STUB = not hasattr(services_module, "build_event_inputs")
+USING_SERVICES_STUB = getattr(services_module, "__STUB__", False)
 
 _DATABASE_MODULE_NAMES = []
 if importlib.util.find_spec("xgoal_tutor.api._database") is not None:
@@ -116,8 +117,8 @@ def llm_stub() -> DummyLLM:
 
 def _build_shot_payload(**overrides: Any) -> Dict[str, Any]:
     payload = {
-        "shot_id": "shot-101",
-        "match_id": "match-abc",
+        "shot_id": "shot-1",
+        "match_id": "match-1",
         "start_x": 102.0,
         "start_y": 34.0,
         "is_set_piece": False,
@@ -141,7 +142,9 @@ def _model_payload() -> Dict[str, Any]:
     }
 
 
-def test_predict_shots_endpoint_returns_predictions_and_caches(llm_stub: DummyLLM):
+def test_predict_shots_endpoint_returns_predictions_and_caches(
+    llm_stub: DummyLLM, seeded_match_database: Dict[str, str]
+) -> None:
     shot_payload = _build_shot_payload()
     model_payload = _model_payload()
 
@@ -168,7 +171,7 @@ def test_predict_shots_endpoint_returns_predictions_and_caches(llm_stub: DummyLL
 
     assert llm_stub.calls
     if USING_SERVICES_STUB:
-        assert "You are an analyst" in llm_stub.calls[0]["prompt"]
+        assert "You are a football analyst" in llm_stub.calls[0]["prompt"]
     else:
         assert llm_stub.calls[0]["prompt"].strip()
 
@@ -279,7 +282,11 @@ def seeded_match_database(tmp_path, monkeypatch) -> Dict[str, str]:
                 is_own_goal INTEGER
             );
             CREATE TABLE freeze_frames (
+                freeze_frame_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 shot_id TEXT,
+                player_id TEXT,
+                player_name TEXT,
+                position_name TEXT,
                 teammate INTEGER,
                 keeper INTEGER,
                 x REAL,

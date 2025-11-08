@@ -65,6 +65,17 @@ class _ShooterMetadata:
     start_y: float
 
 
+def _row_get(row: sqlite3.Row, key: str, default: Optional[object] = None) -> Optional[object]:
+    """Safely access a column from a SQLite row."""
+
+    try:
+        if key in row.keys():
+            return row[key]
+    except AttributeError:  # pragma: no cover - defensive fallback
+        pass
+    return default
+
+
 def build_xgoal_prompt(
     connection: sqlite3.Connection,
     shot_id: str,
@@ -100,7 +111,8 @@ def build_xgoal_prompt(
         connection, shot_row
     )
 
-    xg = float(shot_row["statsbomb_xg"] or 0.0)
+    xg_raw = _row_get(shot_row, "statsbomb_xg", 0.0)
+    xg = float(xg_raw or 0.0)
     features = [line for line in feature_block if line]
     features = features[:5]
     feature_text = "\n".join(features) if features else "none"
@@ -153,22 +165,44 @@ def _collect_match_metadata(
     if match_id is not None:
         with _row_factory(connection):
             if _table_exists(connection, "matches"):
-                match_row = connection.execute(
-                    """
-                    SELECT m.home_team_id, m.away_team_id,
-                           home.team_name AS home_team,
-                           away.team_name AS away_team,
-                           comp.competition_name AS competition,
-                           seas.season_name AS season
-                    FROM matches AS m
-                    LEFT JOIN teams AS home ON home.team_id = m.home_team_id
-                    LEFT JOIN teams AS away ON away.team_id = m.away_team_id
-                    LEFT JOIN competitions AS comp ON comp.competition_id = m.competition_id
-                    LEFT JOIN seasons AS seas ON seas.season_id = m.season_id
-                    WHERE m.match_id = ?
-                    """,
-                    (match_id,),
-                ).fetchone()
+                select_fields = [
+                    "m.home_team_id",
+                    "m.away_team_id",
+                    "home.team_name AS home_team",
+                    "away.team_name AS away_team",
+                ]
+                joins = [
+                    "LEFT JOIN teams AS home ON home.team_id = m.home_team_id",
+                    "LEFT JOIN teams AS away ON away.team_id = m.away_team_id",
+                ]
+
+                if _table_exists(connection, "competitions"):
+                    select_fields.append("comp.competition_name AS competition")
+                    joins.append(
+                        "LEFT JOIN competitions AS comp ON comp.competition_id = m.competition_id"
+                    )
+                else:
+                    select_fields.append("NULL AS competition")
+
+                if _table_exists(connection, "seasons"):
+                    select_fields.append("seas.season_name AS season")
+                    joins.append(
+                        "LEFT JOIN seasons AS seas ON seas.season_id = m.season_id"
+                    )
+                else:
+                    select_fields.append("NULL AS season")
+
+                query = " ".join(
+                    [
+                        "SELECT",
+                        ", ".join(select_fields),
+                        "FROM matches AS m",
+                        *joins,
+                        "WHERE m.match_id = ?",
+                    ]
+                )
+
+                match_row = connection.execute(query, (match_id,)).fetchone()
             else:
                 match_row = None
     else:
@@ -180,11 +214,11 @@ def _collect_match_metadata(
         competition = match_row["competition"] or competition
         season = match_row["season"] or season
 
-    home_team = home_team or shot_row["shooter_team_name"] or "unknown"
-    away_team = away_team or shot_row["opponent_team_name"] or "unknown"
+    home_team = home_team or _row_get(shot_row, "shooter_team_name") or "unknown"
+    away_team = away_team or _row_get(shot_row, "opponent_team_name") or "unknown"
 
-    score_home = shot_row["score_home"]
-    score_away = shot_row["score_away"]
+    score_home = _row_get(shot_row, "score_home")
+    score_away = _row_get(shot_row, "score_away")
 
     return _MatchMetadata(
         home=str(home_team),
@@ -197,10 +231,11 @@ def _collect_match_metadata(
 
 
 def _collect_event_metadata(shot_row: sqlite3.Row) -> _EventMetadata:
-    period = str(shot_row["period"]) if shot_row["period"] is not None else "?"
-    minute = int(shot_row["minute"] or 0)
-    second_value = int(round(float(shot_row["second"] or 0.0)))
-    play_pattern = shot_row["play_pattern"] or "unknown"
+    period_value = _row_get(shot_row, "period")
+    period = str(period_value) if period_value is not None else "?"
+    minute = int(_row_get(shot_row, "minute", 0) or 0)
+    second_value = int(round(float(_row_get(shot_row, "second", 0.0) or 0.0)))
+    play_pattern = (_row_get(shot_row, "play_pattern") or "unknown")
     return _EventMetadata(
         period=period,
         minute=minute,
@@ -212,15 +247,15 @@ def _collect_event_metadata(shot_row: sqlite3.Row) -> _EventMetadata:
 def _collect_shooter_metadata(
     connection: sqlite3.Connection, shot_row: sqlite3.Row
 ) -> _ShooterMetadata:
-    shooter_name = shot_row["shooter_name"] or "unknown"
-    team_name = shot_row["shooter_team_name"] or "unknown"
-    body_part = shot_row["body_part"] or "unknown"
-    technique = shot_row["technique"] or "unknown"
-    start_x = float(shot_row["start_x"] or 0.0)
-    start_y = float(shot_row["start_y"] or 0.0)
+    shooter_name = (_row_get(shot_row, "shooter_name") or "unknown")
+    team_name = (_row_get(shot_row, "shooter_team_name") or "unknown")
+    body_part = (_row_get(shot_row, "body_part") or "unknown")
+    technique = (_row_get(shot_row, "technique") or "unknown")
+    start_x = float(_row_get(shot_row, "start_x", 0.0) or 0.0)
+    start_y = float(_row_get(shot_row, "start_y", 0.0) or 0.0)
 
     shooter_position = "unknown"
-    player_id = shot_row["player_id"]
+    player_id = _row_get(shot_row, "player_id")
     with _row_factory(connection):
         if player_id is not None and _table_exists(connection, "freeze_frames"):
             row = connection.execute(
