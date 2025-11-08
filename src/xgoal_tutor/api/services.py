@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import math
+import json
 from collections import defaultdict
+from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -41,18 +43,66 @@ def build_feature_dataframe(shots: Iterable[ShotFeatures]) -> pd.DataFrame:
     return build_feature_matrix(frame)
 
 
+_DEFAULT_MODEL_PATH = Path(__file__).resolve().parents[3] / "results" / "logreg_coefficients.json"
+_CACHED_MODEL: Optional[LogisticRegressionModel] = None
+
+
+def load_logistic_regression_model(path: Optional[Path] = None) -> LogisticRegressionModel:
+    """Load the logistic regression coefficients from disk."""
+
+    global _CACHED_MODEL
+
+    if path is None and _CACHED_MODEL is not None:
+        return _CACHED_MODEL
+
+    coefficients_path = path or _DEFAULT_MODEL_PATH
+    try:
+        raw = coefficients_path.read_text()
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Coefficient file not found at {coefficients_path}")
+
+    try:
+        entries = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid coefficient JSON: {exc}") from exc
+
+    intercept: Optional[float] = None
+    coefficients: Dict[str, float] = {}
+    for entry in entries:
+        feature = entry.get("feature")
+        coefficient = entry.get("coefficient")
+        if feature is None or coefficient is None:
+            raise ValueError("Each coefficient entry must include 'feature' and 'coefficient'")
+        if feature == "__intercept__":
+            intercept = float(coefficient)
+        else:
+            coefficients[feature] = float(coefficient)
+
+    if intercept is None:
+        raise ValueError("Coefficient file must include an '__intercept__' entry")
+
+    model = LogisticRegressionModel(intercept=intercept, coefficients=coefficients)
+
+    if path is None:
+        _CACHED_MODEL = model
+
+    return model
+
+
 def generate_shot_predictions(
-    shots: Sequence[ShotFeatures], model: LogisticRegressionModel
+    shots: Sequence[ShotFeatures], model: Optional[LogisticRegressionModel] = None
 ) -> Tuple[List[ShotPrediction], pd.DataFrame]:
     """Produce model predictions and contribution breakdowns for the provided shots."""
 
+    model_to_use = model or load_logistic_regression_model()
+
     feature_frame = build_feature_dataframe(shots)
-    probabilities, contributions = calculate_probabilities(feature_frame, model)
+    probabilities, contributions = calculate_probabilities(feature_frame, model_to_use)
 
     predictions: List[ShotPrediction] = []
     for index, shot in enumerate(shots):
         row_contrib = contributions.iloc[index]
-        reason_codes = format_reason_codes(feature_frame.iloc[index], row_contrib, model)
+        reason_codes = format_reason_codes(feature_frame.iloc[index], row_contrib, model_to_use)
         predictions.append(
             ShotPrediction(
                 shot_id=shot.shot_id,

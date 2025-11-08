@@ -481,14 +481,12 @@ components:
     # ---------- Predictions (sync) ----------
     ShotPredictionRequest:
       type: object
-      required: [shots, model]
+      required: [shots]
       properties:
         shots:
           type: array
           items:
             $ref: '#/components/schemas/ShotFeatures'
-        model:
-          $ref: '#/components/schemas/LogisticRegressionModel'
         llm_model:
           type: string
           nullable: true
@@ -536,21 +534,6 @@ components:
         value: { type: number, format: float }
         coefficient: { type: number, format: float }
         contribution: { type: number, format: float }
-
-    LogisticRegressionModel:
-      type: object
-      required: [intercept, coefficients]
-      properties:
-        intercept:
-          type: number
-          format: float
-          description: Intercept term of the logistic regression model
-        coefficients:
-          type: object
-          additionalProperties:
-            type: number
-            format: float
-          description: Mapping of feature names to coefficient values
 
     ShotFeatures:
       type: object

@@ -1,0 +1,78 @@
+[
+  {
+    "feature": "dist_sb",
+    "coefficient": -0.9010703050579709
+  },
+  {
+    "feature": "angle_deg_sb",
+    "coefficient": 0.3703155851320042
+  },
+  {
+    "feature": "is_set_piece",
+    "coefficient": 0.1711948417209748
+  },
+  {
+    "feature": "is_corner",
+    "coefficient": 0.06348293755169943
+  },
+  {
+    "feature": "is_free_kick",
+    "coefficient": 0.16650412639247958
+  },
+  {
+    "feature": "first_time",
+    "coefficient": 0.011872185856797878
+  },
+  {
+    "feature": "under_pressure",
+    "coefficient": -0.01802683569522182
+  },
+  {
+    "feature": "is_header",
+    "coefficient": -0.2245437103660247
+  },
+  {
+    "feature": "gk_depth_sb",
+    "coefficient": 0.33748387852306394
+  },
+  {
+    "feature": "gk_offset_sb",
+    "coefficient": 0.009675857100271095
+  },
+  {
+    "feature": "ff_opponents",
+    "coefficient": -0.20955520523222462
+  },
+  {
+    "feature": "first_time_miss",
+    "coefficient": -0.011872185856797914
+  },
+  {
+    "feature": "one_on_one_miss",
+    "coefficient": -0.08713152360276598
+  },
+  {
+    "feature": "open_goal_miss",
+    "coefficient": -0.09807409951005784
+  },
+  {
+    "feature": "follows_dribble_miss",
+    "coefficient": -0.004170348518494995
+  },
+  {
+    "feature": "deflected_miss",
+    "coefficient": -0.254028734699273
+  },
+  {
+    "feature": "aerial_won_miss",
+    "coefficient": 0.14022173094789095
+  },
+  {
+    "feature": "under_pressure_miss",
+    "coefficient": 0.01802683569522182
+  },
+  {
+    "feature": "__intercept__",
+    "coefficient": -2.6846731417231515
+  }
+]

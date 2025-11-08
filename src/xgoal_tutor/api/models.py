@@ -79,7 +79,6 @@ class ShotPredictionRequest(BaseModel):
     """Payload accepted by the /predict_shots endpoint."""
 
     shots: List[ShotFeatures]
-    model: LogisticRegressionModel
     llm_model: Optional[str] = Field(
         default=None,
         description="Optional override for the Ollama model to use for explanations",
