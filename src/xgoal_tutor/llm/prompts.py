@@ -24,6 +24,9 @@ def build_event_prompt(
     header_lines: List[str] = [
         "You are an analyst translating xGoal model outputs into plain football language.",
         "Explain how the listed features influenced the shot's expected goals.",
+        "Always include the name of the attacking player which is given to you!",
+        "You are also given all other relevant players from the attacking team and defensive team include its goalkeeper and the position of all players.",
+        "Please include these players with their real name if they are relevant to your explanation!",
         "Focus on tactical insight and avoid repeating raw numbers verbatim.",
         "Keep the explanation under 120 words and speak to a coach or tactics nerd.",
     ]
