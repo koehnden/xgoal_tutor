@@ -282,7 +282,7 @@ def ingest(event_paths: Sequence[Path], db_path: Path, stop_on_error: bool = Fal
                 processed += 1
             except Exception as exc:
                 msg = f"✗ Failed for {events_path}: {exc}"
-                logger.error(msg, file=sys.stderr)
+                logger.error(msg)
                 failures.append(msg)
                 if stop_on_error:
                     raise
@@ -293,7 +293,7 @@ def ingest(event_paths: Sequence[Path], db_path: Path, stop_on_error: bool = Fal
 
     logger.info(f"\nDone. Files processed: {processed}. Database: {db_path}")
     if failures:
-        logger.warning("Some files failed:", *failures, sep="\n- ")
+        logger.warning("Some files failed:", *failures)
 
 
 def main(argv: Optional[Iterable[str]] = None) -> None:
