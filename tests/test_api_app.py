@@ -7,71 +7,83 @@ from typing import Any, Dict, Tuple
 import pytest
 
 import importlib
+import importlib.util
 
 # Provide a lightweight stub for xgoal_tutor.api.services so tests do not depend on
-# optional heavy dependencies such as pandas/numpy.
+# optional heavy dependencies such as pandas/numpy when the real module is absent.
 if "xgoal_tutor.api.services" not in sys.modules:  # pragma: no cover - import side effect
-    services_stub = ModuleType("xgoal_tutor.api.services")
+    if importlib.util.find_spec("xgoal_tutor.api.services") is None:
+        services_stub = ModuleType("xgoal_tutor.api.services")
 
-    class _DummyContributions:
-        def __init__(self, count: int) -> None:
-            self._count = count
+        class _DummyContributions:
+            def __init__(self, count: int) -> None:
+                self._count = count
 
-        def iloc(self, index: int) -> Dict[str, float]:
-            return {}
+            def iloc(self, index: int) -> Dict[str, float]:
+                return {}
 
-        def __len__(self) -> int:
-            return self._count
+            def __len__(self) -> int:
+                return self._count
 
-    def create_llm_client() -> Any:
-        class _StubLLM:
-            def generate(self, prompt: str, model: str | None = None, **kwargs: Any) -> Tuple[str, str]:
-                return (" stub explanation ", model or "dummy-model")
+        def create_llm_client() -> Any:
+            class _StubLLM:
+                def generate(self, prompt: str, model: str | None = None, **kwargs: Any) -> Tuple[str, str]:
+                    return (" stub explanation ", model or "dummy-model")
 
-        return _StubLLM()
+            return _StubLLM()
 
-    def generate_llm_explanation(
-        client: Any,
-        shots: Any,
-        predictions: Any,
-        contributions: Any,
-        *,
-        llm_model: str | None = None,
-        prompt_override: str | None = None,
-    ) -> Tuple[str, str]:
-        prompt = prompt_override or "You are an analyst"
-        return client.generate(prompt, model=llm_model)
+        def generate_llm_explanation(
+            client: Any,
+            shots: Any,
+            predictions: Any,
+            contributions: Any,
+            *,
+            llm_model: str | None = None,
+            prompt_override: str | None = None,
+        ) -> Tuple[str, str]:
+            prompt = prompt_override or "You are a football analyst"
+            return client.generate(prompt, model=llm_model)
 
-    def generate_shot_predictions(shots: Any, model: Any) -> Tuple[list, _DummyContributions]:
-        from xgoal_tutor.api.models import ShotPrediction
+        def generate_shot_predictions(shots: Any, model: Any) -> Tuple[list, _DummyContributions]:
+            from xgoal_tutor.api.models import ShotPrediction
 
-        predictions = [
-            ShotPrediction(
-                shot_id=getattr(shot, "shot_id", None),
-                match_id=getattr(shot, "match_id", None),
-                xg=0.25 + 0.05 * index,
-                reason_codes=[],
-            )
-            for index, shot in enumerate(shots)
-        ]
-        return predictions, _DummyContributions(len(predictions))
+            predictions = [
+                ShotPrediction(
+                    shot_id=getattr(shot, "shot_id", None),
+                    match_id=getattr(shot, "match_id", None),
+                    xg=0.25 + 0.05 * index,
+                    reason_codes=[],
+                )
+                for index, shot in enumerate(shots)
+            ]
+            return predictions, _DummyContributions(len(predictions))
 
-    def group_predictions_by_match(predictions: Any) -> Dict[str, list]:
-        grouped: Dict[str, list] = defaultdict(list)
-        for prediction in predictions:
-            match_id = getattr(prediction, "match_id", None)
-            if match_id:
-                grouped[match_id].append(prediction)
-        return grouped
+        def group_predictions_by_match(predictions: Any) -> Dict[str, list]:
+            grouped: Dict[str, list] = defaultdict(list)
+            for prediction in predictions:
+                match_id = getattr(prediction, "match_id", None)
+                if match_id:
+                    grouped[match_id].append(prediction)
+            return grouped
 
-    services_stub.create_llm_client = create_llm_client
-    services_stub.generate_llm_explanation = generate_llm_explanation
-    services_stub.generate_shot_predictions = generate_shot_predictions
-    services_stub.group_predictions_by_match = group_predictions_by_match
-    sys.modules["xgoal_tutor.api.services"] = services_stub
+        services_stub.create_llm_client = create_llm_client
+        services_stub.generate_llm_explanation = generate_llm_explanation
+        services_stub.generate_shot_predictions = generate_shot_predictions
+        services_stub.group_predictions_by_match = group_predictions_by_match
+        services_stub.__STUB__ = True
+        sys.modules["xgoal_tutor.api.services"] = services_stub
+
+services_module = importlib.import_module("xgoal_tutor.api.services")
+USING_SERVICES_STUB = getattr(services_module, "__STUB__", False)
+
+_DATABASE_MODULE_NAMES = []
+if importlib.util.find_spec("xgoal_tutor.api._database") is not None:
+    _DATABASE_MODULE_NAMES.append("xgoal_tutor.api._database")
+if importlib.util.find_spec("xgoal_tutor.api.database") is not None:
+    _DATABASE_MODULE_NAMES.append("xgoal_tutor.api.database")
+DATABASE_MODULES = [importlib.import_module(name) for name in _DATABASE_MODULE_NAMES]
 
 app_module = importlib.import_module("xgoal_tutor.api.app")
-database_module = importlib.import_module("xgoal_tutor.api._database")
 from xgoal_tutor.api.models import (
     LogisticRegressionModel,
     ShotFeatures,
@@ -105,8 +117,8 @@ def llm_stub() -> DummyLLM:
 
 def _build_shot_payload(**overrides: Any) -> Dict[str, Any]:
     payload = {
-        "shot_id": "shot-101",
-        "match_id": "match-abc",
+        "shot_id": "shot-1",
+        "match_id": "match-1",
         "start_x": 102.0,
         "start_y": 34.0,
         "is_set_piece": False,
@@ -130,7 +142,9 @@ def _model_payload() -> Dict[str, Any]:
     }
 
 
-def test_predict_shots_endpoint_returns_predictions_and_caches(llm_stub: DummyLLM):
+def test_predict_shots_endpoint_returns_predictions_and_caches(
+    llm_stub: DummyLLM, seeded_match_database: Dict[str, str]
+) -> None:
     shot_payload = _build_shot_payload()
     model_payload = _model_payload()
 
@@ -141,13 +155,25 @@ def test_predict_shots_endpoint_returns_predictions_and_caches(llm_stub: DummyLL
 
     response = app_module.predict_shots(request)
 
-    assert response.explanation == "stub explanation"
     assert response.llm_model == "dummy-model"
     assert len(response.shots) == 1
-    assert response.shots[0].xg == pytest.approx(0.25)
+
+    if USING_SERVICES_STUB:
+        assert response.explanation == "stub explanation"
+        assert response.shots[0].xg == pytest.approx(0.25)
+    else:
+        assert response.explanation.strip()
+        expected_predictions, _ = services_module.generate_shot_predictions(
+            [ShotFeatures(**shot_payload)],
+            LogisticRegressionModel(**model_payload),
+        )
+        assert response.shots[0].xg == pytest.approx(expected_predictions[0].xg)
 
     assert llm_stub.calls
-    assert "You are an analyst" in llm_stub.calls[0]["prompt"]
+    if USING_SERVICES_STUB:
+        assert "You are a football analyst" in llm_stub.calls[0]["prompt"]
+    else:
+        assert llm_stub.calls[0]["prompt"].strip()
 
     cached = app_module._MATCH_CACHE[shot_payload["match_id"]]
     assert cached.shots[0].shot_id == shot_payload["shot_id"]
@@ -256,7 +282,11 @@ def seeded_match_database(tmp_path, monkeypatch) -> Dict[str, str]:
                 is_own_goal INTEGER
             );
             CREATE TABLE freeze_frames (
+                freeze_frame_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 shot_id TEXT,
+                player_id TEXT,
+                player_name TEXT,
+                position_name TEXT,
                 teammate INTEGER,
                 keeper INTEGER,
                 x REAL,
@@ -369,7 +399,8 @@ def seeded_match_database(tmp_path, monkeypatch) -> Dict[str, str]:
     finally:
         connection.close()
 
-    monkeypatch.setattr(database_module, "_DB_PATH", db_path)
+    for module in DATABASE_MODULES:
+        monkeypatch.setattr(module, "_DB_PATH", db_path)
 
     return {"match_id": "match-1", "second_match_id": "match-2"}
 
