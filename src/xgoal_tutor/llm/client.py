@@ -69,6 +69,9 @@ class OllamaLLM:
         prompt: str,
         options: Dict[str, object],
     ) -> tuple[str, str]:
+        print("\n==== Prompt Sent to LLM ====")
+        print(prompt)
+        print("==== End Prompt ====\n")
         payload = {
             "model": model_name,
             "prompt": prompt,
