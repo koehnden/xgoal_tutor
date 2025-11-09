@@ -12,7 +12,12 @@ import importlib.util
 # Provide a lightweight stub for xgoal_tutor.api.services so tests do not depend on
 # optional heavy dependencies such as pandas/numpy when the real module is absent.
 if "xgoal_tutor.api.services" not in sys.modules:  # pragma: no cover - import side effect
-    if importlib.util.find_spec("xgoal_tutor.api.services") is None:
+    try:
+        services_spec = importlib.util.find_spec("xgoal_tutor.api.services")
+    except ModuleNotFoundError:  # pragma: no cover - package has heavy deps
+        services_spec = None
+
+    if services_spec is None:
         services_stub = ModuleType("xgoal_tutor.api.services")
 
         class _DummyContributions:
@@ -77,9 +82,12 @@ services_module = importlib.import_module("xgoal_tutor.api.services")
 USING_SERVICES_STUB = getattr(services_module, "__STUB__", False)
 
 _DATABASE_MODULE_NAMES = []
-if importlib.util.find_spec("xgoal_tutor.api._database") is not None:
-    _DATABASE_MODULE_NAMES.append("xgoal_tutor.api._database")
-if importlib.util.find_spec("xgoal_tutor.api.database") is not None:
+try:
+    database_spec = importlib.util.find_spec("xgoal_tutor.api.database")
+except ModuleNotFoundError:  # pragma: no cover - package missing optional deps
+    database_spec = None
+
+if database_spec is not None:
     _DATABASE_MODULE_NAMES.append("xgoal_tutor.api.database")
 DATABASE_MODULES = [importlib.import_module(name) for name in _DATABASE_MODULE_NAMES]
 
