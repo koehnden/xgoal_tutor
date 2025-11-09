@@ -17,7 +17,7 @@ from xgoal_tutor.api.models import (
     ShotFeatures,
     ShotPrediction,
 )
-from xgoal_tutor.api._database import get_db
+from xgoal_tutor.api.database import get_db
 from xgoal_tutor.llm.client import OllamaConfig, OllamaLLM
 from xgoal_tutor.llm.xgoal_prompt_builder import build_xgoal_prompt
 from xgoal_tutor.modeling.feature_engineering import build_feature_matrix
