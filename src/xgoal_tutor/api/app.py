@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 
@@ -13,6 +13,7 @@ except (ImportError, AttributeError):  # pragma: no cover - fallback for simplif
         return default
 
 from xgoal_tutor.api.models import (
+    ShotFeatures,
     ShotPredictionRequest,
     ShotPredictionResponse,
 )
@@ -25,7 +26,10 @@ from xgoal_tutor.api.services import (
 
 from xgoal_tutor.api._lineups import get_match_lineups as load_match_lineups
 from xgoal_tutor.api._matches import list_matches as fetch_matches
-from xgoal_tutor.api._shots import list_match_shot_features as fetch_match_shots
+from xgoal_tutor.api._shots import (
+    list_match_shot_features as fetch_match_shots,
+    load_shot_features_by_ids,
+)
 
 app = FastAPI(title="xGoal Inference Service", version="1.0.0")
 
@@ -249,15 +253,24 @@ def predict_shots(payload: ShotPredictionRequest) -> ShotPredictionResponse:
       `generate_llm_explanation(..., prompt_override=payload.prompt_override)`—but do not change
       the behavior here until you wire up the model/schema accordingly.
     """
-    if not payload.shots:
+    shots: List[ShotFeatures] = list(payload.shots)
+    if payload.shot_ids:
+        fetched = load_shot_features_by_ids(payload.shot_ids)
+        missing = [shot_id for shot_id in payload.shot_ids if shot_id not in fetched]
+        if missing:
+            missing_list = ", ".join(sorted(missing))
+            raise HTTPException(status_code=404, detail=f"Shot IDs not found: {missing_list}")
+        shots.extend(fetched[shot_id] for shot_id in payload.shot_ids)
+
+    if not shots:
         raise HTTPException(status_code=400, detail="At least one shot must be provided")
 
-    predictions, contributions = generate_shot_predictions(payload.shots, payload.model)
+    predictions, contributions = generate_shot_predictions(shots, payload.model)
 
     try:
         llm_response, model_used = generate_llm_explanation(
             _LLM_CLIENT,
-            payload.shots,
+            shots,
             predictions,
             contributions,
             llm_model=payload.llm_model,

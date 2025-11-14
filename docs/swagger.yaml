@@ -233,6 +233,9 @@ paths:
       description: |
         Synchronous prediction endpoint. You can optionally override the default LLM prompt
         by setting `prompt_override`.
+
+        Supply either inline `shots` payloads (with engineered features) **or** reference
+        existing shots via `shot_ids` returned from `/match/{match_id}/shots`.
       operationId: predictShots
       requestBody:
         required: true
@@ -249,6 +252,8 @@ paths:
                 $ref: '#/components/schemas/ShotPredictionResponse'
         '400':
           description: At least one shot must be provided
+        '404':
+          description: One or more referenced `shot_ids` could not be located
         '502':
           description: Failed to retrieve a response from the LLM
 
@@ -481,12 +486,17 @@ components:
     # ---------- Predictions (sync) ----------
     ShotPredictionRequest:
       type: object
-      required: [shots, model]
+      required: [model]
       properties:
         shots:
           type: array
           items:
             $ref: '#/components/schemas/ShotFeatures'
+          description: Inline shot feature payloads to score immediately
+        shot_ids:
+          type: array
+          items: { type: string }
+          description: Shot identifiers whose features should be fetched prior to scoring
         model:
           $ref: '#/components/schemas/LogisticRegressionModel'
         llm_model:
@@ -497,6 +507,9 @@ components:
           type: string
           nullable: true
           description: Optional custom prompt to override the default LLM prompt
+      anyOf:
+        - required: [shots]
+        - required: [shot_ids]
 
     ShotPredictionResponse:
       type: object

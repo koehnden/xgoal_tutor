@@ -7,6 +7,13 @@ from typing import Dict, List, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
+def _list_field(*, description: str):
+    field = Field(default_factory=list, description=description)
+    if getattr(field, "default_factory", None) is None:
+        field = Field(default=list(), description=description)
+    return field
+
+
 class LogisticRegressionModel(BaseModel):
     """Parameters describing a trained logistic regression model."""
 
@@ -78,7 +85,12 @@ class ShotPrediction(BaseModel):
 class ShotPredictionRequest(BaseModel):
     """Payload accepted by the /predict_shots endpoint."""
 
-    shots: List[ShotFeatures]
+    shots: List[ShotFeatures] = _list_field(
+        description="Inline shot feature payloads to score immediately",
+    )
+    shot_ids: List[str] = _list_field(
+        description="Identifiers of existing shots to retrieve features for before scoring",
+    )
     model: LogisticRegressionModel
     llm_model: Optional[str] = Field(
         default=None,
