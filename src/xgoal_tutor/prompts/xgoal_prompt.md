@@ -50,10 +50,9 @@ You are given attacking players, defenders, and the goalkeeper positions from a 
 Use only provided names/positions; do not invent facts. If unknown, say “unknown”.
 Be specific but concise. Max {{ word_limit }} words. Speak to a coach/tactics audience.
 
-Match: {{ home }} {{ score_home }}–{{ score_away }} {{ away }} | {{ competition }} {{ season }}
+Match: {{ home }} {{ score_home }}–{{ score_away }} {{ away }} 
 Event: {{ period }}’ {{ minute }}:{{ "%02d"|format(second) }} | pattern={{ play_pattern }}
-Shooter: {{ shooter_name }} ({{ team_name }}), pos={{ shooter_position }}, body={{ body_part }}, tech={{ technique }},
-start=({{ "%.1f"|format(start_x) }},{{ "%.1f"|format(start_y) }})
+Shooter: {{ shooter_name }} ({{ team_name }}), pos on grid={{ "%.1f"|format(start_x) }},{{ "%.1f"|format(start_y) }}, body={{ body_part }}, tech={{ technique }},
 
 GK: {{ gk_line }}
 Attack support: {{ attack_support_line }}
@@ -63,6 +62,7 @@ Model xG: {{ "%.3f"|format(xg) }}
 Top factors (↑ raises xG, ↓ lowers xG) — logistic coefficients:
 {{ feature_block }}
 
-Provide a concise explanation referencing the most influential factors.
+Provide a concise explanation referencing the most influential factors. When talking about influential factors use natural 
+football language instead using the feature names directly, e.g. say "Shooter’s goal distance" instead of "dist_sb".
 Always include key attacker(s), key defender(s) and the goalkeeper.
-Give advice to the key attackers/positions on how to improve or reduce xG next time.
+Give advice to the key attackers/positions on how to improve xG next time.
