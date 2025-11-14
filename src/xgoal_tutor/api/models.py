@@ -91,7 +91,12 @@ class ShotPredictionRequest(BaseModel):
     shot_ids: List[str] = _list_field(
         description="Identifiers of existing shots to retrieve features for before scoring",
     )
-    model: LogisticRegressionModel
+    model: Optional[LogisticRegressionModel] = Field(
+        default=None,
+        description=(
+            "Optional logistic regression model overriding the default baseline parameters"
+        ),
+    )
     llm_model: Optional[str] = Field(
         default=None,
         description="Optional override for the Ollama model to use for explanations",
@@ -129,3 +134,33 @@ class ShotPredictionResponse(BaseModel):
 DEFAULT_PRIMARY_MODEL = "qwen2.5:7b-instruct-q4_0"
 DEFAULT_FALLBACK_MODELS: tuple[str, ...] = ("mistral:7b-instruct-q4_0",)
 ALLOWED_LLM_MODELS = {DEFAULT_PRIMARY_MODEL, *DEFAULT_FALLBACK_MODELS}
+
+
+DEFAULT_LOGISTIC_REGRESSION_MODEL = LogisticRegressionModel(
+    intercept=-1.3291,
+    coefficients={
+        "dist_sb": -0.0793,
+        "angle_deg_sb": 0.0521,
+        "is_set_piece": 0.1845,
+        "is_corner": 0.0623,
+        "is_free_kick": 0.2714,
+        "first_time": 0.0896,
+        "under_pressure": -0.1287,
+        "is_header": -0.2458,
+        "gk_depth_sb": -0.0143,
+        "gk_offset_sb": -0.0098,
+        "ff_opponents": -0.0431,
+        "one_on_one": 0.6142,
+        "open_goal": 1.1421,
+        "follows_dribble": 0.1475,
+        "deflected": -0.1218,
+        "aerial_won": -0.0836,
+        "first_time_miss": -0.0582,
+        "one_on_one_miss": -0.0419,
+        "open_goal_miss": -0.0527,
+        "follows_dribble_miss": -0.0375,
+        "deflected_miss": -0.0331,
+        "aerial_won_miss": -0.0249,
+        "under_pressure_miss": -0.0294,
+    },
+)

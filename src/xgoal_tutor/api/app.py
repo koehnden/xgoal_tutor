@@ -13,6 +13,9 @@ except (ImportError, AttributeError):  # pragma: no cover - fallback for simplif
         return default
 
 from xgoal_tutor.api.models import (
+    DEFAULT_LOGISTIC_REGRESSION_MODEL,
+    DEFAULT_PRIMARY_MODEL,
+    LogisticRegressionModel,
     ShotFeatures,
     ShotPredictionRequest,
     ShotPredictionResponse,
@@ -265,7 +268,10 @@ def predict_shots(payload: ShotPredictionRequest) -> ShotPredictionResponse:
     if not shots:
         raise HTTPException(status_code=400, detail="At least one shot must be provided")
 
-    predictions, contributions = generate_shot_predictions(shots, payload.model)
+    model = payload.model or DEFAULT_LOGISTIC_REGRESSION_MODEL
+    if model is DEFAULT_LOGISTIC_REGRESSION_MODEL:
+        model = LogisticRegressionModel(**DEFAULT_LOGISTIC_REGRESSION_MODEL.model_dump())
+    predictions, contributions = generate_shot_predictions(shots, model)
 
     try:
         llm_response, model_used = generate_llm_explanation(
@@ -278,7 +284,12 @@ def predict_shots(payload: ShotPredictionRequest) -> ShotPredictionResponse:
     except RuntimeError as exc:  # pragma: no cover - network error path
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    response = ShotPredictionResponse(shots=predictions, explanation=llm_response.strip(), llm_model=model_used)
+    resolved_llm_model = model_used or payload.llm_model or DEFAULT_PRIMARY_MODEL
+    response = ShotPredictionResponse(
+        shots=predictions,
+        explanation=llm_response.strip(),
+        llm_model=resolved_llm_model,
+    )
 
     for match_id, match_predictions in group_predictions_by_match(predictions).items():
         cached_response = ShotPredictionResponse(

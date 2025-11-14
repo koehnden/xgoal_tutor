@@ -486,7 +486,6 @@ components:
     # ---------- Predictions (sync) ----------
     ShotPredictionRequest:
       type: object
-      required: [model]
       properties:
         shots:
           type: array
@@ -499,10 +498,15 @@ components:
           description: Shot identifiers whose features should be fetched prior to scoring
         model:
           $ref: '#/components/schemas/LogisticRegressionModel'
+          nullable: true
+          description: >-
+            Optional override for the baseline logistic regression parameters. When omitted,
+            the service uses its packaged default model.
         llm_model:
           type: string
           nullable: true
           description: Optional override for the LLM model to use
+          default: qwen2.5:7b-instruct-q4_0
         prompt_override:
           type: string
           nullable: true
