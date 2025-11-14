@@ -56,17 +56,69 @@ def _build_match_label(
     return None
 
 
-def list_matches(page: int, page_size: int) -> Dict[str, Any]:
+def list_matches(
+    page: int,
+    page_size: int,
+    *,
+    season: str | None = None,
+    competition: str | None = None,
+    team: str | None = None,
+) -> Dict[str, Any]:
     offset = (page - 1) * page_size
+
+    filters: List[str] = []
+    params: List[Any] = []
+
+    def _normalise_filter(value: str | None) -> str | None:
+        if value is None:
+            return None
+
+        text = value.strip()
+        if not text:
+            return None
+
+        return text.lower()
+
+    season_value = _normalise_filter(season)
+    if season_value is not None:
+        filters.append("LOWER(m.season_name) = ?")
+        params.append(season_value)
+
+    competition_value = _normalise_filter(competition)
+    if competition_value is not None:
+        filters.append("LOWER(m.competition_name) = ?")
+        params.append(competition_value)
+
+    team_value = _normalise_filter(team)
+    if team_value is not None:
+        filters.append(
+            "("
+            "LOWER(COALESCE(m.home_team_name, ht.team_name)) = ? OR "
+            "LOWER(COALESCE(m.away_team_name, at.team_name)) = ? OR "
+            "LOWER(ht.short_name) = ? OR "
+            "LOWER(at.short_name) = ?"
+            ")"
+        )
+        params.extend([team_value, team_value, team_value, team_value])
+
+    where_sql = f" WHERE {' AND '.join(filters)}" if filters else ""
+
+    base_from = """
+        FROM matches m
+        LEFT JOIN teams ht ON ht.team_id = m.home_team_id
+        LEFT JOIN teams at ON at.team_id = m.away_team_id
+    """
+
+    base_params = tuple(params)
 
     with get_db() as connection:
         try:
-            cursor = connection.execute("SELECT COUNT(*) AS total FROM matches")
+            count_query = f"SELECT COUNT(*) AS total {base_from}{where_sql}"
+            cursor = connection.execute(count_query, base_params)
             total_row = cursor.fetchone()
             total = int(total_row["total"]) if total_row and total_row["total"] is not None else 0
 
-            rows: List[sqlite3.Row] = connection.execute(
-                """
+            select_query = f"""
                 SELECT
                     m.match_id,
                     m.match_date,
@@ -77,17 +129,16 @@ def list_matches(page: int, page_size: int) -> Dict[str, Any]:
                     m.away_team_id,
                     COALESCE(m.home_team_name, ht.team_name) AS home_team_name,
                     COALESCE(m.away_team_name, at.team_name) AS away_team_name,
-                    m.match_label,
-                    ht.team_name AS home_team_name,
-                    at.team_name AS away_team_name
-                FROM matches m
-                LEFT JOIN teams ht ON ht.team_id = m.home_team_id
-                LEFT JOIN teams at ON at.team_id = m.away_team_id
+                    ht.short_name AS home_team_short_name,
+                    at.short_name AS away_team_short_name,
+                    m.match_label
+                {base_from}
+                {where_sql}
                 ORDER BY m.match_date IS NULL, m.match_date, m.match_id
                 LIMIT ? OFFSET ?
-                """,
-                (page_size, offset),
-            ).fetchall()
+            """
+            select_params = base_params + (page_size, offset)
+            rows: List[sqlite3.Row] = connection.execute(select_query, select_params).fetchall()
         except sqlite3.Error as exc:  # pragma: no cover - defensive guardrail
             raise HTTPException(status_code=500, detail="Database error") from exc
 
@@ -104,8 +155,8 @@ def list_matches(page: int, page_size: int) -> Dict[str, Any]:
                 "competition": row_value(row, "competition_name"),
                 "season": row_value(row, "season_name"),
                 "kickoff_utc": kickoff_utc,
-                "home_team": team_payload(row_value(row, "home_team_id"), home_name, row_value(row, "home_team_name")),
-                "away_team": team_payload(row_value(row, "away_team_id"), away_name, row_value(row, "away_team_name")),
+                "home_team": team_payload(row_value(row, "home_team_id"), home_name, row_value(row, "home_team_short_name")),
+                "away_team": team_payload(row_value(row, "away_team_id"), away_name, row_value(row, "away_team_short_name")),
                 "venue": row_value(row, "venue"),
                 "label": label,
             }
