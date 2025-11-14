@@ -35,7 +35,11 @@ _MATCH_CACHE: Dict[str, ShotPredictionResponse] = {}
 
 @app.get("/matches")
 def list_matches(
-    page: int = Query(1, ge=1), page_size: int = Query(100, ge=1, le=200)
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=200),
+    season: Optional[str] = Query(None),
+    competition: Optional[str] = Query(None),
+    team: Optional[str] = Query(None),
 ) -> Dict[str, Any]:
     """
     List matches available to the tutor UI (paged).
@@ -63,7 +67,13 @@ def list_matches(
     -----
     * Wire up pagination params (page, page_size) and return a paged listing for Streamlit dropdowns.
     """
-    return fetch_matches(page=page, page_size=page_size)
+    return fetch_matches(
+        page=page,
+        page_size=page_size,
+        season=season,
+        competition=competition,
+        team=team,
+    )
 
 
 @app.get("/matches/{match_id}/lineups")
