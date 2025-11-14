@@ -25,6 +25,18 @@ paths:
         - in: query
           name: page_size
           schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+        - in: query
+          name: season
+          schema: { type: string }
+          description: Filter matches by season name (case-insensitive).
+        - in: query
+          name: competition
+          schema: { type: string }
+          description: Filter matches by competition name (case-insensitive).
+        - in: query
+          name: team
+          schema: { type: string }
+          description: Filter matches where the team appears as home or away, matching name or short name.
       responses:
         '200':
           description: Paginated matches list for UI dropdowns

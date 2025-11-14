@@ -321,7 +321,7 @@ def seeded_match_database(tmp_path, monkeypatch) -> Dict[str, str]:
                     "match-2",
                     "2025-09-22",
                     "League",
-                    "2025/26",
+                    "2024/25",
                     "Stadium Two",
                     "3",
                     "4",
@@ -423,6 +423,56 @@ def test_list_matches_supports_pagination(seeded_match_database: Dict[str, str])
     assert page_two["total"] == 2
     assert len(page_two["items"]) == 1
     assert page_two["items"][0]["id"] == seeded_match_database["second_match_id"]
+
+
+def test_list_matches_filters_by_season(seeded_match_database: Dict[str, str]) -> None:
+    response = app_module.list_matches(page=1, page_size=5, season="2025/26")
+
+    assert response["total"] == 1
+    assert len(response["items"]) == 1
+    assert response["items"][0]["id"] == seeded_match_database["match_id"]
+
+    second_response = app_module.list_matches(page=1, page_size=5, season="2024/25")
+
+    assert second_response["total"] == 1
+    assert len(second_response["items"]) == 1
+    assert second_response["items"][0]["id"] == seeded_match_database["second_match_id"]
+
+
+def test_list_matches_filters_by_competition(seeded_match_database: Dict[str, str]) -> None:
+    response = app_module.list_matches(page=1, page_size=5, competition="league")
+
+    assert response["total"] == 1
+    assert len(response["items"]) == 1
+    assert response["items"][0]["id"] == seeded_match_database["second_match_id"]
+
+
+def test_list_matches_filters_by_team(seeded_match_database: Dict[str, str]) -> None:
+    response = app_module.list_matches(page=1, page_size=5, team="Away FC")
+
+    assert response["total"] == 1
+    assert len(response["items"]) == 1
+    assert response["items"][0]["id"] == seeded_match_database["match_id"]
+
+    second_response = app_module.list_matches(page=1, page_size=5, team="Team C")
+
+    assert second_response["total"] == 1
+    assert len(second_response["items"]) == 1
+    assert second_response["items"][0]["id"] == seeded_match_database["second_match_id"]
+
+
+def test_list_matches_filters_by_team_short_name(seeded_match_database: Dict[str, str]) -> None:
+    response = app_module.list_matches(page=1, page_size=5, team="hfc")
+
+    assert response["total"] == 1
+    assert len(response["items"]) == 1
+    assert response["items"][0]["id"] == seeded_match_database["match_id"]
+
+    second_response = app_module.list_matches(page=1, page_size=5, team="afc")
+
+    assert second_response["total"] == 1
+    assert len(second_response["items"]) == 1
+    assert second_response["items"][0]["id"] == seeded_match_database["match_id"]
 
 
 def test_get_match_lineups_returns_home_and_away_groups(seeded_match_database: Dict[str, str]) -> None:
