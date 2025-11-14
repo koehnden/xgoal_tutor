@@ -31,18 +31,20 @@ def format_goal_events(shots: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any
     """Extract goal events from shots and format them for tabular display."""
     events: List[Dict[str, Any]] = []
     for shot in shots:
-        if not shot.get("is_goal"):
+        if shot.get("result") != "Goal":
             continue
-        player = shot.get("player", {}).get("name", "Unknown")
-        team = shot.get("team", {}).get("name", "Team")
+        shooter = shot.get("shooter", {})
+        player = shooter.get("player_name") or shooter.get("name") or "Unknown"
+        team = shooter.get("team_name") or shooter.get("team", {}).get("name") or "Team"
         minute = shot.get("minute")
         second = shot.get("second")
         clock = shot.get("clock")
-        display_time = clock or f"{minute}'"
+        display_time = clock or (f"{minute}'" if minute is not None else "?")
         if isinstance(minute, int) and isinstance(second, int):
             display_time = f"{minute:02d}:{second:02d}"
-        score_home = shot.get("score_home")
-        score_away = shot.get("score_away")
+        score_after = shot.get("scoreline_after") or {}
+        score_home = score_after.get("home")
+        score_away = score_after.get("away")
         scoreline = None
         if score_home is not None and score_away is not None:
             scoreline = f"{score_home}:{score_away}"
@@ -93,7 +95,7 @@ def extract_insight_texts(items: Optional[Iterable[Mapping[str, Any]]]) -> List[
     for item in items:
         if not isinstance(item, Mapping):
             continue
-        text = item.get("text")
+        text = item.get("explanation") or item.get("text")
         if isinstance(text, str) and text.strip():
             texts.append(text.strip())
     return texts
@@ -104,9 +106,9 @@ def describe_player_highlight(highlight: Optional[Mapping[str, Any]]) -> Optiona
     if not isinstance(highlight, Mapping):
         return None
     player_name = highlight.get("player", {}).get("name")
-    rationale = highlight.get("rationale")
-    if player_name and rationale:
-        return f"**{player_name}** — {rationale}"
+    explanation = highlight.get("explanation")
+    if player_name and explanation:
+        return f"**{player_name}** — {explanation}"
     if player_name:
         return f"**{player_name}**"
     return None
@@ -125,17 +127,20 @@ def build_shot_option_label(shot: Mapping[str, Any]) -> str:
         time_part = f"{minute}'"
     else:
         time_part = "?"
-    player_name = shot.get("player", {}).get("name", "Unknown")
-    team_name = shot.get("team", {}).get("name")
-    outcome = "Goal" if shot.get("is_goal") else shot.get("outcome") or "Shot"
-    xg = shot.get("xg_statsbomb")
+    shooter = shot.get("shooter", {})
+    player_name = shooter.get("player_name") or shooter.get("name") or "Unknown"
+    team_name = shooter.get("team_name") or shooter.get("team", {}).get("name")
+    outcome = shot.get("result") or shot.get("outcome") or "Shot"
+    xg = shot.get("predicted_xg")
+    if not isinstance(xg, (int, float)):
+        xg = shot.get("xg_statsbomb")
     xg_part = f"xG {xg:.2f}" if isinstance(xg, (int, float)) else ""
-    score_home = shot.get("score_home")
-    score_away = shot.get("score_away")
-    if shot.get("is_goal") and score_home is not None and score_away is not None:
+    score_after = shot.get("scoreline_after") or {}
+    score_home = score_after.get("home")
+    score_away = score_after.get("away")
+    score_part = ""
+    if outcome == "Goal" and score_home is not None and score_away is not None:
         score_part = f" {score_home}:{score_away}"
-    else:
-        score_part = ""
     team_part = f" – {team_name}" if team_name else ""
     parts = [time_part, player_name, outcome]
     label = ", ".join(parts)
