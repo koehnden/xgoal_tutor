@@ -257,7 +257,7 @@ paths:
               $ref: '#/components/schemas/ShotPredictionRequest'
       responses:
         '200':
-          description: Predictions and explanation
+          description: Predictions and explanations
           content:
             application/json:
               schema:
@@ -529,22 +529,19 @@ components:
 
     ShotPredictionResponse:
       type: object
-      required: [shots, explanation, llm_model]
+      required: [shots, llm_model]
       properties:
         shots:
           type: array
           items:
             $ref: '#/components/schemas/ShotPrediction'
-        explanation:
-          type: string
-          description: Natural-language explanation returned by the language model
         llm_model:
           type: string
-          description: Name of the model that produced the explanation
+          description: Name of the model that produced the explanations
 
     ShotPrediction:
       type: object
-      required: [xg, reason_codes]
+      required: [xg, reason_codes, explanation]
       properties:
         shot_id: { type: string, nullable: true }
         match_id: { type: string, nullable: true }
@@ -556,6 +553,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ReasonCode'
+        explanation:
+          type: string
+          description: Natural-language explanation for this specific shot
 
     ReasonCode:
       type: object

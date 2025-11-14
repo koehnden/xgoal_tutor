@@ -11,7 +11,7 @@ if getattr(services, "__STUB__", False):
     pytest.skip("xgoal_tutor.api.services stubbed", allow_module_level=True)
 
 from xgoal_tutor.api.services import (
-    _build_xgoal_prompt,
+    _build_xgoal_prompts,
     _format_feature_block,
     build_feature_dataframe,
     calculate_probabilities,
@@ -89,7 +89,7 @@ def test_generate_shot_predictions_returns_sorted_reason_codes():
     assert returned_features == list(sorted_by_contrib.index[: len(returned_features)])
 
 
-def test_build_xgoal_prompt_renders_markdown_template(monkeypatch):
+def test_build_xgoal_prompts_render_markdown_template(monkeypatch):
     import sqlite3
     from contextlib import contextmanager
 
@@ -175,10 +175,11 @@ def test_build_xgoal_prompt_renders_markdown_template(monkeypatch):
         ]
     )
 
-    prompt = _build_xgoal_prompt(shots, predictions, contributions)
-    assert "You are a football analyst" in prompt
-    assert prompt.count("Top factors") == 2
-    assert "---" in prompt
+    prompts = _build_xgoal_prompts(shots, predictions, contributions)
+    assert len(prompts) == 2
+    assert all("You are a football analyst" in prompt for prompt in prompts)
+    assert all("Top factors" in prompt for prompt in prompts)
+    assert all("---" not in prompt for prompt in prompts)
 
     connection.close()
 

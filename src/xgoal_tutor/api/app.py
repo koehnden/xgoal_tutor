@@ -17,6 +17,7 @@ from xgoal_tutor.api.models import (
     DEFAULT_PRIMARY_MODEL,
     LogisticRegressionModel,
     ShotFeatures,
+    ShotPrediction,
     ShotPredictionRequest,
     ShotPredictionResponse,
 )
@@ -42,11 +43,7 @@ _MATCH_CACHE: Dict[str, ShotPredictionResponse] = {}
 
 @app.get("/matches")
 def list_matches(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(100, ge=1, le=200),
-    season: Optional[str] = Query(None),
-    competition: Optional[str] = Query(None),
-    team: Optional[str] = Query(None),
+    page: int = Query(1, ge=1), page_size: int = Query(100, ge=1, le=200)
 ) -> Dict[str, Any]:
     """
     List matches available to the tutor UI (paged).
@@ -74,13 +71,7 @@ def list_matches(
     -----
     * Wire up pagination params (page, page_size) and return a paged listing for Streamlit dropdowns.
     """
-    return fetch_matches(
-        page=page,
-        page_size=page_size,
-        season=season,
-        competition=competition,
-        team=team,
-    )
+    return fetch_matches(page=page, page_size=page_size)
 
 
 @app.get("/matches/{match_id}/lineups")
@@ -284,7 +275,7 @@ def predict_shots(payload: ShotPredictionRequest) -> ShotPredictionResponse:
     predictions, contributions = generate_shot_predictions(shots, model)
 
     try:
-        llm_response, model_used = generate_llm_explanation(
+        llm_responses, model_used = generate_llm_explanation(
             _LLM_CLIENT,
             shots,
             predictions,
@@ -295,16 +286,33 @@ def predict_shots(payload: ShotPredictionRequest) -> ShotPredictionResponse:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     resolved_llm_model = model_used or payload.llm_model or DEFAULT_PRIMARY_MODEL
+
+    predictions_with_explanations: List[ShotPrediction] = []
+    for index, prediction in enumerate(predictions):
+        if hasattr(prediction, "model_dump"):
+            data = prediction.model_dump()
+        else:
+            data = prediction.dict()  # type: ignore[attr-defined]
+        data["explanation"] = llm_responses[index]
+        predictions_with_explanations.append(ShotPrediction(**data))
+
     response = ShotPredictionResponse(
-        shots=predictions,
-        explanation=llm_response.strip(),
+        shots=predictions_with_explanations,
         llm_model=resolved_llm_model,
     )
 
-    for match_id, match_predictions in group_predictions_by_match(predictions).items():
+    for match_id, match_predictions in group_predictions_by_match(predictions_with_explanations).items():
         cached_response = ShotPredictionResponse(
-            shots=list(match_predictions),
-            explanation=response.explanation,
+            shots=[
+                ShotPrediction(
+                    **(
+                        prediction.model_dump()
+                        if hasattr(prediction, "model_dump")
+                        else prediction.dict()  # type: ignore[attr-defined]
+                    )
+                )
+                for prediction in match_predictions
+            ],
             llm_model=response.llm_model,
         )
         _MATCH_CACHE[match_id] = cached_response

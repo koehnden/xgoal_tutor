@@ -47,9 +47,11 @@ if "xgoal_tutor.api.services" not in sys.modules:  # pragma: no cover - import s
             *,
             llm_model: str | None = None,
             prompt_override: str | None = None,
-        ) -> Tuple[str, str]:
+        ) -> Tuple[list[str], str]:
             prompt = prompt_override or "You are a football analyst"
-            return client.generate(prompt, model=llm_model)
+            explanation, model_name = client.generate(prompt, model=llm_model)
+            count = len(predictions) if hasattr(predictions, "__len__") else 1
+            return [explanation] * count, model_name
 
         def generate_shot_predictions(shots: Any, model: Any) -> Tuple[list, _DummyContributions]:
             from xgoal_tutor.api.models import ShotPrediction
@@ -153,16 +155,18 @@ def test_predict_shots_endpoint_returns_predictions_and_caches(
     assert response.llm_model == DEFAULT_PRIMARY_MODEL
     assert len(response.shots) == 1
 
+    first_shot = response.shots[0]
+
     if USING_SERVICES_STUB:
-        assert response.explanation == "stub explanation"
-        assert response.shots[0].xg == pytest.approx(0.25)
+        assert first_shot.explanation == "stub explanation"
+        assert first_shot.xg == pytest.approx(0.25)
     else:
-        assert response.explanation.strip()
+        assert first_shot.explanation.strip()
         expected_predictions, _ = services_module.generate_shot_predictions(
             [ShotFeatures(**shot_payload)],
             DEFAULT_LOGISTIC_REGRESSION_MODEL,
         )
-        assert response.shots[0].xg == pytest.approx(expected_predictions[0].xg)
+        assert first_shot.xg == pytest.approx(expected_predictions[0].xg)
 
     assert llm_stub.calls
     if USING_SERVICES_STUB:
@@ -172,6 +176,7 @@ def test_predict_shots_endpoint_returns_predictions_and_caches(
 
     cached = app_module._MATCH_CACHE[shot_payload["match_id"]]
     assert cached.shots[0].shot_id == shot_payload["shot_id"]
+    assert cached.shots[0].explanation
 
 
 def test_predict_shots_with_prompt_uses_custom_prompt(llm_stub: DummyLLM):
@@ -188,7 +193,7 @@ def test_predict_shots_with_prompt_uses_custom_prompt(llm_stub: DummyLLM):
 
     response = app_module.predict_shots_with_prompt(request)
 
-    assert response.explanation == "stub explanation"
+    assert response.shots[0].explanation == "stub explanation"
     assert llm_stub.calls[-1]["prompt"] == prompt_text
 
 

@@ -74,12 +74,16 @@ class ReasonCode(BaseModel):
 
 
 class ShotPrediction(BaseModel):
-    """xG estimate and contributing factors for a single shot."""
+    """xG estimate, contributing factors, and explanation for a single shot."""
 
     shot_id: Optional[str]
     match_id: Optional[str]
     xg: float
     reason_codes: List[ReasonCode]
+    explanation: Optional[str] = Field(
+        default=None,
+        description="Natural-language explanation generated for this shot",
+    )
 
 
 class ShotPredictionRequest(BaseModel):
@@ -126,7 +130,6 @@ class ShotPredictionResponse(BaseModel):
     """Response returned by /predict_shots."""
 
     shots: List[ShotPrediction]
-    explanation: str
     llm_model: str
 
 
