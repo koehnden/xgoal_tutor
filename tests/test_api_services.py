@@ -179,6 +179,7 @@ def test_build_xgoal_prompts_render_markdown_template(monkeypatch):
     assert len(prompts) == 2
     assert all("You are a football analyst" in prompt for prompt in prompts)
     assert all("Top factors" in prompt for prompt in prompts)
+    assert all("(raw value:" in prompt for prompt in prompts)
     assert all("---" not in prompt for prompt in prompts)
 
     connection.close()
@@ -186,9 +187,12 @@ def test_build_xgoal_prompts_render_markdown_template(monkeypatch):
 
 def test_format_feature_block_orders_by_absolute_value():
     row = pd.Series({"dist_sb": -0.2, "angle_deg_sb": 0.05, "is_corner": 0.0})
-    lines = _format_feature_block(row)
+    raw = pd.Series({"dist_sb": 10.5, "angle_deg_sb": 25.0, "is_corner": 0.0})
+
+    lines = _format_feature_block(row, raw)
 
     assert lines[0].startswith("↓ dist_sb")
+    assert "raw value:10.5" in lines[0]
     assert all("is_corner" not in line for line in lines)
 
 

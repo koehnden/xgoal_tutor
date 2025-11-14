@@ -31,13 +31,13 @@ Be specific but concise. Max 180 words. Speak to a coach/tactics audience.
 
 Match: {home} {score_home}–{score_away} {away} | {competition} {season}
 Event: {period}’ {minute}:{second:02d} | pattern={play_pattern}
-Shooter: {shooter_name} ({team_name}), pos={shooter_position}, body={body_part}, tech={technique}, start=({start_x:.1f},{start_y:.1f})
+Shooter: {shooter_name} ({team_name}), pos={shooter_position}, pos on grid={start_x:.1f},{start_y:.1f}, body={body_part}, tech={technique}
 GK: {gk_line}
 Attack support: {attack_support_line}
 Pressure: {pressure_line}
 
 Model xG: {xg:.3f}
-Top factors (↑ raises xG, ↓ lowers xG) which are coefficients of a logistic regression that predict the probability for a goal:
+Top factors (↑ raises xG, ↓ lowers xG) from logistic coefficients and raw feature values:
 {feature_block}
 
 Provide a concise explanation referencing the most influential factors!

@@ -128,7 +128,9 @@ def test_prompt_builder_formats_full_prompt() -> None:
     assert "Alex Wing" in prompt
     assert "Centre Back" in prompt
     assert "Model xG: 0.348" in prompt
-    assert "Top factors (↑ raises xG, ↓ lowers xG) — logistic coefficients:" in prompt
+    assert (
+        "Top factors (↑ raises xG, ↓ lowers xG) from logistic coefficients and raw feature values:" in prompt
+    )
     assert "Set up by a quick one-two on the left." in prompt
 
 

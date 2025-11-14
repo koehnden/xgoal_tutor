@@ -38,6 +38,7 @@ def build_feature_dataframe(shots: Iterable[ShotFeatures]) -> pd.DataFrame:
 
     raw_records = [shot.model_dump() for shot in shots]
     frame = pd.DataFrame(raw_records)
+    frame = frame.where(pd.notnull(frame), np.nan)
     return build_feature_matrix(frame)
 
 
@@ -172,6 +173,8 @@ def _build_xgoal_prompts(
     if len(contributions) < len(shots):
         raise ValueError("Missing contribution rows for the provided shots")
 
+    feature_frame = build_feature_dataframe(shots)
+
     prompts: List[str] = []
     with get_db() as connection:
         for index, (shot, prediction) in enumerate(zip(shots, predictions)):
@@ -180,7 +183,8 @@ def _build_xgoal_prompts(
                 raise ValueError("Each shot must include a shot_id to build prompts")
 
             contribution_row = contributions.iloc[index]
-            feature_block = _format_feature_block(contribution_row)
+            raw_feature_row = feature_frame.iloc[index] if index < len(feature_frame) else pd.Series(dtype=float)
+            feature_block = _format_feature_block(contribution_row, raw_feature_row)
 
             prompts.append(
                 build_xgoal_prompt(
@@ -191,9 +195,13 @@ def _build_xgoal_prompts(
             )
 
     return prompts
+        
 
-
-def _format_feature_block(contribution_row: pd.Series, limit: int = 5) -> List[str]:
+def _format_feature_block(
+    contribution_row: pd.Series,
+    feature_row: pd.Series,
+    limit: int = 5,
+) -> List[str]:
     """Convert a contribution row into formatted prompt bullet points."""
 
     sortable = (
@@ -208,11 +216,40 @@ def _format_feature_block(contribution_row: pd.Series, limit: int = 5) -> List[s
     sortable = sortable[[col for col in sortable.index if not str(col).startswith("__")]]
     ordered = sortable.reindex(sortable.abs().sort_values(ascending=False).index)
 
+    raw_values = (
+        feature_row
+        if isinstance(feature_row, pd.Series)
+        else pd.Series(feature_row)
+    )
+
     lines: List[str] = []
     for feature, value in ordered.iloc[:limit].items():
         if math.isclose(float(value), 0.0, abs_tol=1e-9):
             continue
         arrow = "↑" if value > 0 else "↓"
-        lines.append(f"{arrow} {feature} ({value:+.3f})")
+        raw_value = raw_values.get(feature, float("nan"))
+        formatted_raw = _format_raw_value_for_prompt(raw_value)
+        lines.append(f"{arrow} {feature} ({value:+.3f}) (raw value:{formatted_raw})")
 
     return lines
+
+
+def _format_raw_value_for_prompt(value: object) -> str:
+    """Return a human-friendly string for raw feature values in prompts."""
+
+    if value is None:
+        return "n/a"
+
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+
+    if pd.isna(numeric) or not math.isfinite(numeric):
+        return "n/a"
+
+    if math.isclose(numeric, round(numeric), abs_tol=1e-6):
+        return str(int(round(numeric)))
+
+    text = f"{numeric:.3f}".rstrip("0").rstrip(".")
+    return text or "0"
