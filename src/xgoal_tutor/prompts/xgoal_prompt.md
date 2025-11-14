@@ -50,16 +50,16 @@ You are given attacking players, defenders, and the goalkeeper positions from a 
 Use only provided names/positions; do not invent facts. If unknown, say “unknown”.
 Be specific but concise. Max {{ word_limit }} words. Speak to a coach/tactics audience.
 
-Match: {{ home }} {{ score_home }}–{{ score_away }} {{ away }} 
+Match: {{ home }} {{ score_home }}–{{ score_away }} {{ away }} | {{ competition }} {{ season }}
 Event: {{ period }}’ {{ minute }}:{{ "%02d"|format(second) }} | pattern={{ play_pattern }}
-Shooter: {{ shooter_name }} ({{ team_name }}), pos on grid={{ "%.1f"|format(start_x) }},{{ "%.1f"|format(start_y) }}, body={{ body_part }}, tech={{ technique }},
+Shooter: {{ shooter_name }} ({{ team_name }}), pos={{ shooter_position }}, pos on grid={{ "%.1f"|format(start_x) }},{{ "%.1f"|format(start_y) }}, body={{ body_part }}, tech={{ technique }},
 
 GK: {{ gk_line }}
 Attack support: {{ attack_support_line }}
 Pressure: {{ pressure_line }}
 
 Model xG: {{ "%.3f"|format(xg) }}
-Top factors (↑ raises xG, ↓ lowers xG) — logistic coefficients:
+Top factors (↑ raises xG, ↓ lowers xG) from logistic coefficients and raw feature values:
 {{ feature_block }}
 
 Provide a concise explanation referencing the most influential factors. When talking about influential factors use natural 
