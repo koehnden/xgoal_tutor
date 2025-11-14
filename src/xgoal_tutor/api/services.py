@@ -118,16 +118,33 @@ def generate_llm_explanation(
     *,
     llm_model: Optional[str] = None,
     prompt_override: Optional[str] = None,
-) -> Tuple[str, str]:
-    """Create an explanation for the predictions via the configured LLM."""
 
-    prompt: str
+) -> Tuple[List[str], str]:
+    """Create explanations for the predictions via the configured LLM."""
+
+    prompts: List[str]
     if prompt_override is not None:
-        prompt = prompt_override
+        prompts = [prompt_override]
     else:
-        prompt = _build_xgoal_prompt(shots, predictions, contributions)
+        prompts = _build_xgoal_prompts(shots, predictions, contributions)
 
-    return client.generate(prompt, model=llm_model)
+    explanations: List[str] = []
+    model_used: Optional[str] = None
+    for prompt in prompts:
+        text, used_model = client.generate(prompt, model=llm_model)
+        explanations.append(text.strip())
+        if not model_used:
+            model_used = used_model
+
+    if not model_used:
+        model_used = llm_model or DEFAULT_PRIMARY_MODEL
+
+    if len(explanations) == 1 and len(predictions) > 1:
+        explanations = explanations * len(predictions)
+    elif len(explanations) != len(predictions):
+        raise ValueError("Explanation count does not match prediction count")
+
+    return explanations, model_used
 
 
 def group_predictions_by_match(
@@ -142,12 +159,12 @@ def group_predictions_by_match(
     return grouped
 
 
-def _build_xgoal_prompt(
+def _build_xgoal_prompts(
     shots: Sequence[ShotFeatures],
     predictions: Sequence[ShotPrediction],
     contributions: pd.DataFrame,
-) -> str:
-    """Render the xGoal Markdown prompt(s) for the provided shots."""
+) -> List[str]:
+    """Render the xGoal Markdown prompts for the provided shots."""
 
     if len(shots) != len(predictions):
         raise ValueError("Shots and predictions length mismatch")
@@ -173,15 +190,7 @@ def _build_xgoal_prompt(
                 )
             )
 
-    if len(prompts) == 1:
-        return prompts[0]
-
-    separator = "\n\n---\n\n"
-    intro = (
-        "You will receive multiple shot prompts below. Provide a distinct explanation for each, "
-        "respecting every block's guidance."
-    )
-    return f"{intro}\n\n" + separator.join(prompts)
+    return prompts
 
 
 def _format_feature_block(contribution_row: pd.Series, limit: int = 5) -> List[str]:

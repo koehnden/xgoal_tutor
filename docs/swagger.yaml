@@ -233,6 +233,9 @@ paths:
       description: |
         Synchronous prediction endpoint. You can optionally override the default LLM prompt
         by setting `prompt_override`.
+
+        Supply either inline `shots` payloads (with engineered features) **or** reference
+        existing shots via `shot_ids` returned from `/match/{match_id}/shots`.
       operationId: predictShots
       requestBody:
         required: true
@@ -242,13 +245,15 @@ paths:
               $ref: '#/components/schemas/ShotPredictionRequest'
       responses:
         '200':
-          description: Predictions and explanation
+          description: Predictions and explanations
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ShotPredictionResponse'
         '400':
           description: At least one shot must be provided
+        '404':
+          description: One or more referenced `shot_ids` could not be located
         '502':
           description: Failed to retrieve a response from the LLM
 
@@ -481,41 +486,50 @@ components:
     # ---------- Predictions (sync) ----------
     ShotPredictionRequest:
       type: object
-      required: [shots, model]
       properties:
         shots:
           type: array
           items:
             $ref: '#/components/schemas/ShotFeatures'
+          description: Inline shot feature payloads to score immediately
+        shot_ids:
+          type: array
+          items: { type: string }
+          description: Shot identifiers whose features should be fetched prior to scoring
         model:
           $ref: '#/components/schemas/LogisticRegressionModel'
+          nullable: true
+          description: >-
+            Optional override for the baseline logistic regression parameters. When omitted,
+            the service uses its packaged default model.
         llm_model:
           type: string
           nullable: true
           description: Optional override for the LLM model to use
+          default: qwen2.5:7b-instruct-q4_0
         prompt_override:
           type: string
           nullable: true
           description: Optional custom prompt to override the default LLM prompt
+      anyOf:
+        - required: [shots]
+        - required: [shot_ids]
 
     ShotPredictionResponse:
       type: object
-      required: [shots, explanation, llm_model]
+      required: [shots, llm_model]
       properties:
         shots:
           type: array
           items:
             $ref: '#/components/schemas/ShotPrediction'
-        explanation:
-          type: string
-          description: Natural-language explanation returned by the language model
         llm_model:
           type: string
-          description: Name of the model that produced the explanation
+          description: Name of the model that produced the explanations
 
     ShotPrediction:
       type: object
-      required: [xg, reason_codes]
+      required: [xg, reason_codes, explanation]
       properties:
         shot_id: { type: string, nullable: true }
         match_id: { type: string, nullable: true }
@@ -527,6 +541,9 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ReasonCode'
+        explanation:
+          type: string
+          description: Natural-language explanation for this specific shot
 
     ReasonCode:
       type: object

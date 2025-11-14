@@ -9,6 +9,8 @@ import pytest
 import importlib
 import importlib.util
 
+DEFAULT_PRIMARY_MODEL_NAME = "qwen2.5:7b-instruct-q4_0"
+
 # Provide a lightweight stub for xgoal_tutor.api.services so tests do not depend on
 # optional heavy dependencies such as pandas/numpy when the real module is absent.
 if "xgoal_tutor.api.services" not in sys.modules:  # pragma: no cover - import side effect
@@ -33,7 +35,7 @@ if "xgoal_tutor.api.services" not in sys.modules:  # pragma: no cover - import s
         def create_llm_client() -> Any:
             class _StubLLM:
                 def generate(self, prompt: str, model: str | None = None, **kwargs: Any) -> Tuple[str, str]:
-                    return (" stub explanation ", model or "dummy-model")
+                    return (" stub explanation ", model or DEFAULT_PRIMARY_MODEL_NAME)
 
             return _StubLLM()
 
@@ -45,9 +47,11 @@ if "xgoal_tutor.api.services" not in sys.modules:  # pragma: no cover - import s
             *,
             llm_model: str | None = None,
             prompt_override: str | None = None,
-        ) -> Tuple[str, str]:
+        ) -> Tuple[list[str], str]:
             prompt = prompt_override or "You are a football analyst"
-            return client.generate(prompt, model=llm_model)
+            explanation, model_name = client.generate(prompt, model=llm_model)
+            count = len(predictions) if hasattr(predictions, "__len__") else 1
+            return [explanation] * count, model_name
 
         def generate_shot_predictions(shots: Any, model: Any) -> Tuple[list, _DummyContributions]:
             from xgoal_tutor.api.models import ShotPrediction
@@ -93,7 +97,8 @@ DATABASE_MODULES = [importlib.import_module(name) for name in _DATABASE_MODULE_N
 
 app_module = importlib.import_module("xgoal_tutor.api.app")
 from xgoal_tutor.api.models import (
-    LogisticRegressionModel,
+    DEFAULT_LOGISTIC_REGRESSION_MODEL,
+    DEFAULT_PRIMARY_MODEL,
     ShotFeatures,
     ShotPredictionRequest,
     ShotPredictionWithPromptRequest,
@@ -107,7 +112,7 @@ class DummyLLM:
 
     def generate(self, prompt: str, model: str | None = None, **kwargs: Any) -> Tuple[str, str]:
         self.calls.append({"prompt": prompt, "model": model, "options": kwargs})
-        return (" stub explanation ", model or "dummy-model")
+        return (" stub explanation ", model or DEFAULT_PRIMARY_MODEL)
 
 
 @pytest.fixture
@@ -136,46 +141,32 @@ def _build_shot_payload(**overrides: Any) -> Dict[str, Any]:
     }
     payload.update(overrides)
     return payload
-
-
-def _model_payload() -> Dict[str, Any]:
-    return {
-        "intercept": -0.3,
-        "coefficients": {
-            "dist_sb": -0.04,
-            "angle_deg_sb": 0.03,
-            "is_set_piece": 0.2,
-            "under_pressure": -0.15,
-        },
-    }
-
-
 def test_predict_shots_endpoint_returns_predictions_and_caches(
     llm_stub: DummyLLM, seeded_match_database: Dict[str, str]
 ) -> None:
     shot_payload = _build_shot_payload()
-    model_payload = _model_payload()
 
     request = ShotPredictionRequest(
         shots=[ShotFeatures(**shot_payload)],
-        model=LogisticRegressionModel(**model_payload),
     )
 
     response = app_module.predict_shots(request)
 
-    assert response.llm_model == "dummy-model"
+    assert response.llm_model == DEFAULT_PRIMARY_MODEL
     assert len(response.shots) == 1
 
+    first_shot = response.shots[0]
+
     if USING_SERVICES_STUB:
-        assert response.explanation == "stub explanation"
-        assert response.shots[0].xg == pytest.approx(0.25)
+        assert first_shot.explanation == "stub explanation"
+        assert first_shot.xg == pytest.approx(0.25)
     else:
-        assert response.explanation.strip()
+        assert first_shot.explanation.strip()
         expected_predictions, _ = services_module.generate_shot_predictions(
             [ShotFeatures(**shot_payload)],
-            LogisticRegressionModel(**model_payload),
+            DEFAULT_LOGISTIC_REGRESSION_MODEL,
         )
-        assert response.shots[0].xg == pytest.approx(expected_predictions[0].xg)
+        assert first_shot.xg == pytest.approx(expected_predictions[0].xg)
 
     assert llm_stub.calls
     if USING_SERVICES_STUB:
@@ -185,6 +176,7 @@ def test_predict_shots_endpoint_returns_predictions_and_caches(
 
     cached = app_module._MATCH_CACHE[shot_payload["match_id"]]
     assert cached.shots[0].shot_id == shot_payload["shot_id"]
+    assert cached.shots[0].explanation
 
 
 def test_predict_shots_with_prompt_uses_custom_prompt(llm_stub: DummyLLM):
@@ -192,25 +184,22 @@ def test_predict_shots_with_prompt_uses_custom_prompt(llm_stub: DummyLLM):
         pytest.skip("predict_shots_with_prompt endpoint not implemented")
 
     shot_payload = _build_shot_payload(shot_id="shot-202")
-    model_payload = _model_payload()
     prompt_text = "Custom tactical analysis"
 
     request = ShotPredictionWithPromptRequest(
         shots=[ShotFeatures(**shot_payload)],
-        model=LogisticRegressionModel(**model_payload),
         prompt=prompt_text,
     )
 
     response = app_module.predict_shots_with_prompt(request)
 
-    assert response.explanation == "stub explanation"
+    assert response.shots[0].explanation == "stub explanation"
     assert llm_stub.calls[-1]["prompt"] == prompt_text
 
 
 def test_predict_shots_rejects_empty_shot_list(llm_stub: DummyLLM):
     request = ShotPredictionRequest(
         shots=[],
-        model=LogisticRegressionModel(**_model_payload()),
     )
 
     with pytest.raises(HTTPException) as excinfo:
