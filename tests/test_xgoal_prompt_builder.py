@@ -73,6 +73,17 @@ def _setup_base_schema(connection: sqlite3.Connection) -> None:
             x REAL,
             y REAL
         );
+
+        CREATE TABLE match_lineups (
+            lineup_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            match_id INTEGER,
+            team_id INTEGER,
+            player_id INTEGER,
+            player_name TEXT,
+            position_name TEXT,
+            is_starter INTEGER,
+            sort_order INTEGER
+        );
         """
     )
 
@@ -98,6 +109,13 @@ def test_prompt_builder_formats_full_prompt() -> None:
             102.0, 38.0, 'right foot', 'volley', 0.348, 1, 0,
             1, 0
         );
+        """
+    )
+
+    connection.execute(
+        """
+        INSERT INTO match_lineups(match_id, team_id, player_id, player_name, position_name, is_starter, sort_order)
+        VALUES (100, 1, 9, 'Jordan Smith', 'Striker', 1, 1)
         """
     )
 
@@ -164,6 +182,13 @@ def test_prompt_builder_handles_missing_freeze_frame() -> None:
         """
     )
 
+    connection.execute(
+        """
+        INSERT INTO match_lineups(match_id, team_id, player_id, player_name, position_name, is_starter, sort_order)
+        VALUES (100, 1, 9, 'Jordan Smith', 'Forward', 1, 1)
+        """
+    )
+
     prompt = build_xgoal_prompt(
         connection,
         "shot-2",
@@ -198,6 +223,13 @@ def test_prompt_builder_uses_unknown_names_and_cone_defender() -> None:
         """
     )
 
+    connection.execute(
+        """
+        INSERT INTO match_lineups(match_id, team_id, player_id, player_name, position_name, is_starter, sort_order)
+        VALUES (200, 1, 9, 'Jordan Smith', 'Striker', 1, 1)
+        """
+    )
+
     freeze_frames = [
         ("shot-3", 9, None, None, 1, 0, 95.0, 30.0),
         ("shot-3", 33, None, None, 0, 0, 119.0, 36.5),
@@ -216,7 +248,7 @@ def test_prompt_builder_uses_unknown_names_and_cone_defender() -> None:
         feature_block=["↑ shot on target"],
     )
 
-    assert "pos=unknown" in prompt
+    assert "pos=Striker" in prompt
     assert "Pressure: unknown" in prompt  # defender included via cone rule
 
 
