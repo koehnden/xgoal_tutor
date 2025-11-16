@@ -44,6 +44,12 @@ Here is a brief description of each feature:
 - *_miss: 1 if the underlying field is absent/unknown.
 - intercept: logistic regression intercept.
 
+Style for angles and distances:
+- When you mention an exact angle, first describe it qualitatively and then put the number in brackets.
+  - Example: "Player X header in a center position towards the goal (41.2°)".
+- Do NOT lead with the number or say things like "at 41.2 degrees" or "41.2 degrees, significantly boosting the chance".
+- Keep the numeric value short and neutral — the football wording should carry the meaning, the number is just context.
+
 When referring to any player use the players’ real names exactly as given.
 You are given attacking players, defenders, and the goalkeeper positions from a freeze-frame
 (StatsBomb 120×80 grid; (0,0)=own goal-line left corner; (120,40)=centre of attacking goal).
