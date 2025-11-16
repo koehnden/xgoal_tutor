@@ -43,11 +43,10 @@ def int_to_bool(value: Any, *, default: Optional[bool] = None) -> Optional[bool]
         return default
 
 
-def team_payload(team_id: Any, name: Optional[str], short_name: Optional[str] = None) -> Dict[str, Any]:
+def team_payload(team_id: Any, name: Optional[str]) -> Dict[str, Any]:
     return {
         "id": str(team_id) if team_id is not None else None,
         "name": name,
-        "short_name": short_name,
     }
 
 
