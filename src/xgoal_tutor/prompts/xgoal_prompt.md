@@ -73,4 +73,5 @@ Top factors (↑ raises xG, ↓ lowers xG) from logistic coefficients and raw fe
 Provide a concise explanation referencing the most influential factors. When talking about influential factors use natural 
 football language instead using the feature names directly, e.g. say "Shooter’s goal distance" instead of "dist_sb".
 Always include key attacker(s), key defender(s) and the goalkeeper.
-Give advice to the key attackers/positions on how to improve xG next time.
+Give advice to the key attackers/positions on how to improve xG next time. Do not give advise to defenders. 
+Focus only on the attacking team!
