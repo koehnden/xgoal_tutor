@@ -132,7 +132,7 @@ def build_xgoal_prompt(
     xg_raw = _row_get(shot_row, "statsbomb_xg", 0.0)
     xg = float(xg_raw or 0.0)
     features = [line for line in feature_block if line]
-    features = features[:5]
+    features = features[:10]
     feature_text = "\n".join(features) if features else "none"
 
     context_section = context_block.strip() if context_block else ""
