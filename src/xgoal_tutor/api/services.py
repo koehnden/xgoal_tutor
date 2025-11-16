@@ -184,7 +184,7 @@ def _build_xgoal_prompts(
 
             contribution_row = contributions.iloc[index]
             raw_feature_row = feature_frame.iloc[index] if index < len(feature_frame) else pd.Series(dtype=float)
-            feature_block = _format_feature_block(contribution_row, raw_feature_row)
+            feature_block = _format_feature_block(contribution_row, raw_feature_row, limit=10)
 
             prompts.append(
                 build_xgoal_prompt(
