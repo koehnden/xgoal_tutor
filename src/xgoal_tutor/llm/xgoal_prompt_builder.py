@@ -111,9 +111,15 @@ def build_xgoal_prompt(
 
     match_meta = _collect_match_metadata(connection, shot_row)
     event_meta = _collect_event_metadata(shot_row)
-    shooter_meta = _collect_shooter_metadata(connection, shot_row)
+    freeze_frame_entries: Optional[List[_FreezeFrameEntry]] = None
+    if _table_exists(connection, "freeze_frames"):
+        freeze_frame_entries = _load_freeze_frames(connection, shot_row["shot_id"])
+
+    shooter_meta = _collect_shooter_metadata(
+        connection, shot_row, freeze_frame_entries or []
+    )
     goalkeeper_text, support_line, pressure_line = _format_freeze_frame_blocks(
-        connection, shot_row
+        freeze_frame_entries or [], shot_row, shooter_meta
     )
     scoreline_before, scoreline_after = _build_scorelines(shot_row, match_meta)
     shot_outcome = _format_shot_outcome(
@@ -126,7 +132,7 @@ def build_xgoal_prompt(
     xg_raw = _row_get(shot_row, "statsbomb_xg", 0.0)
     xg = float(xg_raw or 0.0)
     features = [line for line in feature_block if line]
-    features = features[:10]
+    features = features[:5]
     feature_text = "\n".join(features) if features else "none"
 
     context_section = context_block.strip() if context_block else ""
@@ -264,7 +270,9 @@ def _collect_event_metadata(shot_row: sqlite3.Row) -> _EventMetadata:
 
 
 def _collect_shooter_metadata(
-    connection: sqlite3.Connection, shot_row: sqlite3.Row
+    connection: sqlite3.Connection,
+    shot_row: sqlite3.Row,
+    freeze_frames: Sequence[_FreezeFrameEntry],
 ) -> _ShooterMetadata:
     shooter_name = (_row_get(shot_row, "shooter_name") or "unknown")
     team_name = (_row_get(shot_row, "shooter_team_name") or "unknown")
@@ -273,22 +281,25 @@ def _collect_shooter_metadata(
     start_x = float(_row_get(shot_row, "start_x", 0.0) or 0.0)
     start_y = float(_row_get(shot_row, "start_y", 0.0) or 0.0)
 
-    shooter_position = "unknown"
+    shooter_position: Optional[str] = None
     player_id = _row_get(shot_row, "player_id")
-    with _row_factory(connection):
-        if player_id is not None and _table_exists(connection, "freeze_frames"):
-            row = connection.execute(
-                """
-                SELECT position_name
-                FROM freeze_frames
-                WHERE shot_id = ? AND teammate = 1 AND player_id = ? AND position_name IS NOT NULL
-                ORDER BY freeze_frame_id ASC
-                LIMIT 1
-                """,
-                (shot_row["shot_id"], player_id),
-            ).fetchone()
-            if row is not None and row["position_name"]:
-                shooter_position = row["position_name"]
+    shooter_name = _row_get(shot_row, "shooter_name")
+    shooter_entry = _resolve_shooter_entry(
+        freeze_frames, player_id, shooter_name, start_x, start_y
+    )
+
+    if shooter_entry is not None:
+        if shooter_entry.position_name:
+            shooter_position = shooter_entry.position_name
+        if shooter_entry.x is not None:
+            start_x = float(shooter_entry.x)
+        if shooter_entry.y is not None:
+            start_y = float(shooter_entry.y)
+
+    if not shooter_position:
+        shooter_position = (
+            _lookup_lineup_position(connection, shot_row, player_id) or "unknown"
+        )
 
     return _ShooterMetadata(
         name=shooter_name,
@@ -301,17 +312,82 @@ def _collect_shooter_metadata(
     )
 
 
+def _resolve_shooter_entry(
+    entries: Sequence[_FreezeFrameEntry],
+    player_id: Optional[int],
+    shooter_name: Optional[str],
+    fallback_x: float,
+    fallback_y: float,
+) -> Optional[_FreezeFrameEntry]:
+    if player_id is not None:
+        for entry in entries:
+            if entry.player_id == player_id:
+                return entry
+
+    if shooter_name:
+        for entry in entries:
+            if entry.player_name and entry.player_name == shooter_name:
+                return entry
+
+    closest_entry: Optional[_FreezeFrameEntry] = None
+    closest_distance = float("inf")
+    for entry in entries:
+        if not entry.teammate or entry.keeper:
+            continue
+        if entry.x is None or entry.y is None:
+            continue
+        distance = math.hypot(entry.x - fallback_x, entry.y - fallback_y)
+        if distance < closest_distance:
+            closest_distance = distance
+            closest_entry = entry
+
+    return closest_entry
+
+
+def _lookup_lineup_position(
+    connection: sqlite3.Connection,
+    shot_row: sqlite3.Row,
+    player_id: Optional[int],
+) -> Optional[str]:
+    match_id = _row_get(shot_row, "match_id")
+    if player_id is None or match_id is None:
+        return None
+    if not _table_exists(connection, "match_lineups"):
+        return None
+
+    with _row_factory(connection):
+        row = connection.execute(
+            """
+            SELECT position_name
+            FROM match_lineups
+            WHERE match_id = ? AND player_id = ? AND position_name IS NOT NULL
+            ORDER BY is_starter DESC, sort_order ASC
+            LIMIT 1
+            """,
+            (match_id, player_id),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    position_name = row["position_name"]
+    return str(position_name) if position_name else None
+
+
 def _format_freeze_frame_blocks(
-    connection: sqlite3.Connection, shot_row: sqlite3.Row
+    entries: Sequence[_FreezeFrameEntry],
+    shot_row: sqlite3.Row,
+    shooter_meta: _ShooterMetadata,
 ) -> Tuple[str, str, str]:
-    if not _table_exists(connection, "freeze_frames"):
+    if not entries:
         return ("unknown", "none", "none")
 
-    entries = _load_freeze_frames(connection, shot_row["shot_id"])
-
     goalkeeper_text = _build_goalkeeper_text(entries)
-    support_line = _build_support_line(entries, shot_row)
-    pressure_line = _build_pressure_line(entries, shot_row)
+    shooter_id = _row_get(shot_row, "player_id")
+    support_line = _build_support_line(
+        entries, shooter_id, shooter_meta.start_x, shooter_meta.start_y
+    )
+    pressure_line = _build_pressure_line(entries, shooter_meta.start_x, shooter_meta.start_y)
 
     return goalkeeper_text, support_line, pressure_line
 
@@ -367,21 +443,20 @@ def _build_goalkeeper_text(entries: Sequence[_FreezeFrameEntry]) -> str:
 
 
 def _build_support_line(
-    entries: Sequence[_FreezeFrameEntry], shot_row: sqlite3.Row
+    entries: Sequence[_FreezeFrameEntry],
+    shooter_id: Optional[int],
+    shooter_x: float,
+    shooter_y: float,
 ) -> str:
-    start_x = float(shot_row["start_x"] or 0.0)
-    start_y = float(shot_row["start_y"] or 0.0)
-    shooter_id = shot_row["player_id"]
-
     teammates: List[Tuple[str, float, float]] = []
     for entry in entries:
         if not entry.teammate or entry.player_id == shooter_id:
             continue
         if entry.x is None or entry.y is None:
             continue
-        distance = math.hypot(entry.x - start_x, entry.y - start_y)
+        distance = math.hypot(entry.x - shooter_x, entry.y - shooter_y)
         if distance <= 18:
-            bearing = _bearing_to_goal(start_x, start_y, entry.x, entry.y)
+            bearing = _bearing_to_goal(shooter_x, shooter_y, entry.x, entry.y)
             name = entry.player_name or "unknown"
             teammates.append((name, distance, bearing))
 
@@ -394,11 +469,8 @@ def _build_support_line(
 
 
 def _build_pressure_line(
-    entries: Sequence[_FreezeFrameEntry], shot_row: sqlite3.Row
+    entries: Sequence[_FreezeFrameEntry], shooter_x: float, shooter_y: float
 ) -> str:
-    start_x = float(shot_row["start_x"] or 0.0)
-    start_y = float(shot_row["start_y"] or 0.0)
-
     defenders_close: List[Tuple[str, float, float]] = []
     defenders_cone: List[Tuple[str, float, float]] = []
 
@@ -408,13 +480,13 @@ def _build_pressure_line(
         if entry.x is None or entry.y is None:
             continue
 
-        distance = math.hypot(entry.x - start_x, entry.y - start_y)
-        bearing = _bearing_to_goal(start_x, start_y, entry.x, entry.y)
+        distance = math.hypot(entry.x - shooter_x, entry.y - shooter_y)
+        bearing = _bearing_to_goal(shooter_x, shooter_y, entry.x, entry.y)
         name = entry.player_name or "unknown"
 
         if distance <= 15:
             defenders_close.append((name, distance, bearing))
-        elif _in_shot_cone(start_x, start_y, entry.x, entry.y):
+        elif _in_shot_cone(shooter_x, shooter_y, entry.x, entry.y):
             defenders_cone.append((name, distance, bearing))
 
     defenders_close.sort(key=lambda item: item[1])
