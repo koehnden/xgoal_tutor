@@ -112,7 +112,9 @@ def test_build_xgoal_prompts_render_markdown_template(monkeypatch):
             technique TEXT,
             statsbomb_xg REAL,
             score_home INTEGER,
-            score_away INTEGER
+            score_away INTEGER,
+            is_goal INTEGER,
+            is_own_goal INTEGER
         );
         CREATE TABLE players (player_id INTEGER PRIMARY KEY, player_name TEXT);
         CREATE TABLE teams (team_id INTEGER PRIMARY KEY, team_name TEXT);
@@ -134,13 +136,25 @@ def test_build_xgoal_prompts_render_markdown_template(monkeypatch):
         """
         INSERT INTO teams(team_id, team_name) VALUES (1, 'Home FC'), (2, 'Away FC');
         INSERT INTO players(player_id, player_name) VALUES (9, 'Jordan Smith');
-        INSERT INTO shots VALUES (
+        INSERT INTO shots(
+            shot_id, match_id, team_id, opponent_team_id, player_id,
+            period, minute, second, play_pattern, start_x, start_y,
+            body_part, technique, statsbomb_xg, score_home, score_away,
+            is_goal, is_own_goal
+        ) VALUES (
             'shot-1', 10, 1, 2, 9, 1, 12, 30.0, 'open_play', 102.0, 38.0,
-            'right foot', 'volley', 0.321, 1, 0
+            'right foot', 'volley', 0.321, 1, 0,
+            0, 0
         );
-        INSERT INTO shots VALUES (
+        INSERT INTO shots(
+            shot_id, match_id, team_id, opponent_team_id, player_id,
+            period, minute, second, play_pattern, start_x, start_y,
+            body_part, technique, statsbomb_xg, score_home, score_away,
+            is_goal, is_own_goal
+        ) VALUES (
             'shot-2', 10, 1, 2, 9, 1, 16, 45.0, 'fast_break', 108.0, 40.0,
-            'right foot', 'open', 0.210, 1, 0
+            'right foot', 'open', 0.210, 1, 0,
+            0, 0
         );
         INSERT INTO freeze_frames(shot_id, player_id, player_name, position_name, teammate, keeper, x, y)
         VALUES

@@ -22,6 +22,7 @@ requires:
   - pressure_line
   - xg
   - feature_block
+  - shot_outcome
 word_limit: 180
 notes:
   - StatsBomb pitch is 120x80; freeze-frame provides all players and GK at shot time.
@@ -58,6 +59,7 @@ Be specific but concise. Max {{ word_limit }} words. Speak to a coach/tactics au
 
 Match: {{ home }} {{ score_home }}–{{ score_away }} {{ away }} | {{ competition }} {{ season }}
 Event: {{ period }}’ {{ minute }}:{{ "%02d"|format(second) }} | pattern={{ play_pattern }}
+Outcome: {{ shot_outcome }}
 Shooter: {{ shooter_name }} ({{ team_name }}), pos={{ shooter_position }}, pos on grid={{ "%.1f"|format(start_x) }},{{ "%.1f"|format(start_y) }}, body={{ body_part }}, tech={{ technique }},
 
 GK: {{ gk_line }}

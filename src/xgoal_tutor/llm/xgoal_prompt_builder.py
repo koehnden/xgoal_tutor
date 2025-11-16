@@ -6,9 +6,10 @@ import math
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from xgoal_tutor.prompts import load_template
+from xgoal_tutor.llm.utils import as_bool, as_int
 
 
 @dataclass
@@ -44,6 +45,8 @@ class _MatchMetadata:
     away: str
     competition: str
     season: str
+    home_team_id: Optional[int]
+    away_team_id: Optional[int]
 
 
 @dataclass
@@ -74,6 +77,8 @@ def _row_get(row: sqlite3.Row, key: str, default: Optional[object] = None) -> Op
     except AttributeError:  # pragma: no cover - defensive fallback
         pass
     return default
+
+
 
 
 def build_xgoal_prompt(
@@ -109,6 +114,13 @@ def build_xgoal_prompt(
     shooter_meta = _collect_shooter_metadata(connection, shot_row)
     goalkeeper_text, support_line, pressure_line = _format_freeze_frame_blocks(
         connection, shot_row
+    )
+    scoreline_before, scoreline_after = _build_scorelines(shot_row, match_meta)
+    shot_outcome = _format_shot_outcome(
+        scoreline_before,
+        scoreline_after,
+        match_meta,
+        is_goal=_row_get(shot_row, "is_goal"),
     )
 
     xg_raw = _row_get(shot_row, "statsbomb_xg", 0.0)
@@ -146,6 +158,7 @@ def build_xgoal_prompt(
             "pressure_line": pressure_line,
             "xg": xg,
             "feature_block": feature_text,
+            "shot_outcome": shot_outcome,
         }
     )
 
@@ -161,6 +174,8 @@ def _collect_match_metadata(
     away_team: Optional[str] = None
     competition: Optional[str] = None
     season: Optional[str] = None
+    home_team_id: Optional[int] = None
+    away_team_id: Optional[int] = None
 
     if match_id is not None:
         with _row_factory(connection):
@@ -213,6 +228,8 @@ def _collect_match_metadata(
         away_team = match_row["away_team"] or away_team
         competition = match_row["competition"] or competition
         season = match_row["season"] or season
+        home_team_id = as_int(_row_get(match_row, "home_team_id")) or home_team_id
+        away_team_id = as_int(_row_get(match_row, "away_team_id")) or away_team_id
 
     home_team = home_team or _row_get(shot_row, "shooter_team_name") or "unknown"
     away_team = away_team or _row_get(shot_row, "opponent_team_name") or "unknown"
@@ -227,6 +244,8 @@ def _collect_match_metadata(
         away=str(away_team),
         competition=str(competition) if competition else "unknown",
         season=str(season) if season else "unknown",
+        home_team_id=home_team_id,
+        away_team_id=away_team_id,
     )
 
 
@@ -421,6 +440,111 @@ def _build_pressure_line(
     ]
 
     return ", ".join(formatted) if formatted else "none"
+
+
+def _build_scorelines(
+    shot_row: sqlite3.Row, match_meta: _MatchMetadata
+) -> Tuple[Optional[Dict[str, int]], Optional[Dict[str, int]]]:
+    score_home = as_int(_row_get(shot_row, "score_home"))
+    score_away = as_int(_row_get(shot_row, "score_away"))
+    if score_home is None or score_away is None:
+        return None, None
+
+    after = {"home": score_home, "away": score_away}
+    before: Optional[Dict[str, int]] = {"home": score_home, "away": score_away}
+
+    if not as_bool(_row_get(shot_row, "is_goal")):
+        return before, after
+
+    if match_meta.home_team_id is None or match_meta.away_team_id is None:
+        return None, after
+
+    scoring_team = _resolve_scoring_team(shot_row, match_meta)
+    if scoring_team == match_meta.home_team_id and before is not None:
+        before["home"] = max(before["home"] - 1, 0)
+    elif scoring_team == match_meta.away_team_id and before is not None:
+        before["away"] = max(before["away"] - 1, 0)
+    else:
+        before = None
+
+    return before, after
+
+
+def _resolve_scoring_team(
+    shot_row: sqlite3.Row, match_meta: _MatchMetadata
+) -> Optional[int]:
+    team_id = as_int(_row_get(shot_row, "team_id"))
+    opponent_team_id = as_int(_row_get(shot_row, "opponent_team_id"))
+
+    if as_bool(_row_get(shot_row, "is_own_goal")):
+        if opponent_team_id is not None:
+            return opponent_team_id
+        home_id = match_meta.home_team_id
+        away_id = match_meta.away_team_id
+        if team_id == home_id:
+            return away_id
+        if team_id == away_id:
+            return home_id
+        return opponent_team_id
+
+    return team_id
+
+
+def _format_shot_outcome(
+    scoreline_before: Optional[Dict[str, int]],
+    scoreline_after: Optional[Dict[str, int]],
+    match_meta: _MatchMetadata,
+    *,
+    is_goal: Optional[object],
+) -> str:
+    goal_known = is_goal is not None
+    goal_flag = as_bool(is_goal)
+    score_text = _format_scoreline(scoreline_after)
+
+    if scoreline_before is None or scoreline_after is None:
+        if goal_flag:
+            return f"Goal ({score_text})" if score_text else "Goal"
+        if goal_known:
+            return f"No goal ({score_text})" if score_text else "No goal"
+        return f"Outcome unknown ({score_text})" if score_text else "Outcome unknown"
+
+    home_before = scoreline_before.get("home")
+    home_after = scoreline_after.get("home")
+    away_before = scoreline_before.get("away")
+    away_after = scoreline_after.get("away")
+
+    values = (home_before, home_after, away_before, away_after)
+    if any(value is None for value in values):
+        if goal_flag:
+            return f"Goal ({score_text})" if score_text else "Goal"
+        if goal_known:
+            return f"No goal ({score_text})" if score_text else "No goal"
+        return f"Outcome unknown ({score_text})" if score_text else "Outcome unknown"
+
+    home_delta = home_after - home_before
+    away_delta = away_after - away_before
+
+    if home_delta > 0 and away_delta == 0:
+        team = match_meta.home or "home team"
+        return f"Goal for {team} ({score_text})" if score_text else f"Goal for {team}"
+    if away_delta > 0 and home_delta == 0:
+        team = match_meta.away or "away team"
+        return f"Goal for {team} ({score_text})" if score_text else f"Goal for {team}"
+    if home_delta == 0 and away_delta == 0:
+        return f"No goal ({score_text})" if score_text else "No goal"
+
+    change = "Score changed"
+    return f"{change} ({score_text})" if score_text else change
+
+
+def _format_scoreline(scoreline: Optional[Dict[str, int]]) -> str:
+    if not scoreline:
+        return ""
+    home = scoreline.get("home")
+    away = scoreline.get("away")
+    if home is None or away is None:
+        return ""
+    return f"{home}–{away}"
 
 
 def _bearing_to_goal(sx: float, sy: float, px: float, py: float) -> float:

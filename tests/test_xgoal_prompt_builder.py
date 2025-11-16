@@ -29,7 +29,9 @@ def _setup_base_schema(connection: sqlite3.Connection) -> None:
             technique TEXT,
             statsbomb_xg REAL,
             score_home INTEGER,
-            score_away INTEGER
+            score_away INTEGER,
+            is_goal INTEGER,
+            is_own_goal INTEGER
         );
 
         CREATE TABLE players (
@@ -86,9 +88,15 @@ def test_prompt_builder_formats_full_prompt() -> None:
         INSERT INTO competitions VALUES (1, 'Champions League');
         INSERT INTO seasons VALUES (5, '2023/24');
         INSERT INTO matches VALUES (100, 1, 2, 1, 5);
-        INSERT INTO shots VALUES (
+        INSERT INTO shots(
+            shot_id, match_id, team_id, opponent_team_id, player_id,
+            period, minute, second, play_pattern, start_x, start_y,
+            body_part, technique, statsbomb_xg, score_home, score_away,
+            is_goal, is_own_goal
+        ) VALUES (
             'shot-1', 100, 1, 2, 9, 1, 23, 12.4, 'open_play',
-            102.0, 38.0, 'right foot', 'volley', 0.348, 1, 0
+            102.0, 38.0, 'right foot', 'volley', 0.348, 1, 0,
+            1, 0
         );
         """
     )
@@ -132,6 +140,7 @@ def test_prompt_builder_formats_full_prompt() -> None:
         "Top factors (↑ raises xG, ↓ lowers xG) from logistic coefficients and raw feature values:" in prompt
     )
     assert "Set up by a quick one-two on the left." in prompt
+    assert "Outcome: Goal for Attacking FC (1–0)" in prompt
 
 
 def test_prompt_builder_handles_missing_freeze_frame() -> None:
@@ -142,9 +151,15 @@ def test_prompt_builder_handles_missing_freeze_frame() -> None:
         """
         INSERT INTO teams(team_id, team_name) VALUES (1, 'Attacking FC');
         INSERT INTO players(player_id, player_name) VALUES (9, 'Jordan Smith');
-        INSERT INTO shots VALUES (
+        INSERT INTO shots(
+            shot_id, match_id, team_id, opponent_team_id, player_id,
+            period, minute, second, play_pattern, start_x, start_y,
+            body_part, technique, statsbomb_xg, score_home, score_away,
+            is_goal, is_own_goal
+        ) VALUES (
             'shot-2', 100, 1, NULL, 9, 2, 55, 48.9, 'fast_break',
-            98.0, 40.0, 'left foot', 'open', 0.412, 2, 1
+            98.0, 40.0, 'left foot', 'open', 0.412, 2, 1,
+            0, 0
         );
         """
     )
@@ -158,6 +173,7 @@ def test_prompt_builder_handles_missing_freeze_frame() -> None:
     assert "Attack support: none" in prompt
     assert "Pressure: none" in prompt
     assert "GK: unknown" in prompt
+    assert "Outcome: No goal (2–1)" in prompt
 
 
 def test_prompt_builder_uses_unknown_names_and_cone_defender() -> None:
@@ -169,9 +185,15 @@ def test_prompt_builder_uses_unknown_names_and_cone_defender() -> None:
         INSERT INTO teams VALUES (1, 'Attacking FC'), (2, 'Defensive SC');
         INSERT INTO players VALUES (9, 'Jordan Smith');
         INSERT INTO matches VALUES (200, 1, 2, NULL, NULL);
-        INSERT INTO shots VALUES (
+        INSERT INTO shots(
+            shot_id, match_id, team_id, opponent_team_id, player_id,
+            period, minute, second, play_pattern, start_x, start_y,
+            body_part, technique, statsbomb_xg, score_home, score_away,
+            is_goal, is_own_goal
+        ) VALUES (
             'shot-3', 200, 1, 2, 9, 1, 10, 5.0, 'open_play',
-            95.0, 30.0, NULL, NULL, 0.250, NULL, NULL
+            95.0, 30.0, NULL, NULL, 0.250, NULL, NULL,
+            0, 0
         );
         """
     )
@@ -206,9 +228,15 @@ def test_prompt_builder_truncates_feature_block() -> None:
         """
         INSERT INTO teams VALUES (1, 'Attacking FC');
         INSERT INTO players VALUES (9, 'Jordan Smith');
-        INSERT INTO shots VALUES (
+        INSERT INTO shots(
+            shot_id, match_id, team_id, opponent_team_id, player_id,
+            period, minute, second, play_pattern, start_x, start_y,
+            body_part, technique, statsbomb_xg, score_home, score_away,
+            is_goal, is_own_goal
+        ) VALUES (
             'shot-4', NULL, 1, NULL, 9, 1, 1, 0.1, 'open_play',
-            110.0, 39.0, 'right foot', 'open', 0.123, NULL, NULL
+            110.0, 39.0, 'right foot', 'open', 0.123, NULL, NULL,
+            0, 0
         );
         """
     )
