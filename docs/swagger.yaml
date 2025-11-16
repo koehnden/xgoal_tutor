@@ -36,7 +36,7 @@ paths:
         - in: query
           name: team
           schema: { type: string }
-          description: Filter matches where the team appears as home or away, matching name or short name.
+          description: Filter matches where the team appears as home or away, matching the team name.
       responses:
         '200':
           description: Paginated matches list for UI dropdowns
@@ -53,8 +53,8 @@ paths:
                         kickoff_utc: "2025-09-21T19:00:00Z"
                         competition: "Friendly"
                         season: "2025/26"
-                        home_team: { id: "SB-T-100", name: "FC Barcelona", short_name: "Barcelona" }
-                        away_team: { id: "SB-T-200", name: "Chelsea FC", short_name: "Chelsea" }
+                        home_team: { id: "SB-T-100", name: "FC Barcelona" }
+                        away_team: { id: "SB-T-200", name: "Chelsea FC" }
                         venue: "Estadi Olímpic Lluís Companys"
                       - id: "SB-0002"
                         label: "Liverpool – AC Milan (2025-07-30)"
@@ -91,7 +91,7 @@ paths:
                 default:
                   value:
                     home:
-                      team: { id: "SB-T-100", name: "FC Barcelona", short_name: "Barcelona" }
+                      team: { id: "SB-T-100", name: "FC Barcelona" }
                       starters:
                         - player: { id: "SB-P-10", name: "Robert Lewandowski", jersey_number: 9, position: "CF" }
                           is_starter: true
@@ -106,7 +106,7 @@ paths:
                           is_starter: false
                           sort_order: 18
                     away:
-                      team: { id: "SB-T-200", name: "Chelsea FC", short_name: "Chelsea" }
+                      team: { id: "SB-T-200", name: "Chelsea FC" }
                       starters:
                         - player: { id: "SB-P-1", name: "Djordje Petrovic", jersey_number: 1, position: "GK" }
                           is_starter: true
@@ -300,7 +300,6 @@ components:
       properties:
         id: { type: string }
         name: { type: string }
-        short_name: { type: string, nullable: true }
 
     Player:
       type: object

@@ -5,11 +5,37 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+import re
 import sqlite3
 from fastapi import HTTPException
 
 from xgoal_tutor.api.database import get_db
 from xgoal_tutor.api._row_utils import row_value, team_payload
+
+
+_TEAM_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9]+")
+
+
+def _team_short_code(value: Any) -> str | None:
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    codes: List[str] = []
+    for token in _TEAM_TOKEN_PATTERN.findall(text):
+        lower_token = token.lower()
+        if not lower_token:
+            continue
+
+        codes.append(lower_token if len(lower_token) <= 3 else lower_token[0])
+
+    if not codes:
+        return None
+
+    return "".join(codes)
 
 
 def _normalise_kickoff(value: Any) -> str | None:
@@ -95,8 +121,8 @@ def list_matches(
             "("
             "LOWER(COALESCE(m.home_team_name, ht.team_name)) = ? OR "
             "LOWER(COALESCE(m.away_team_name, at.team_name)) = ? OR "
-            "LOWER(ht.short_name) = ? OR "
-            "LOWER(at.short_name) = ?"
+            "COALESCE(team_short_code(m.home_team_name), team_short_code(ht.team_name)) = ? OR "
+            "COALESCE(team_short_code(m.away_team_name), team_short_code(at.team_name)) = ?"
             ")"
         )
         params.extend([team_value, team_value, team_value, team_value])
@@ -112,6 +138,7 @@ def list_matches(
     base_params = tuple(params)
 
     with get_db() as connection:
+        connection.create_function("team_short_code", 1, _team_short_code)
         try:
             count_query = f"SELECT COUNT(*) AS total {base_from}{where_sql}"
             cursor = connection.execute(count_query, base_params)
@@ -129,8 +156,6 @@ def list_matches(
                     m.away_team_id,
                     COALESCE(m.home_team_name, ht.team_name) AS home_team_name,
                     COALESCE(m.away_team_name, at.team_name) AS away_team_name,
-                    ht.short_name AS home_team_short_name,
-                    at.short_name AS away_team_short_name,
                     m.match_label
                 {base_from}
                 {where_sql}
@@ -155,8 +180,8 @@ def list_matches(
                 "competition": row_value(row, "competition_name"),
                 "season": row_value(row, "season_name"),
                 "kickoff_utc": kickoff_utc,
-                "home_team": team_payload(row_value(row, "home_team_id"), home_name, row_value(row, "home_team_short_name")),
-                "away_team": team_payload(row_value(row, "away_team_id"), away_name, row_value(row, "away_team_short_name")),
+                "home_team": team_payload(row_value(row, "home_team_id"), home_name),
+                "away_team": team_payload(row_value(row, "away_team_id"), away_name),
                 "venue": row_value(row, "venue"),
                 "label": label,
             }
