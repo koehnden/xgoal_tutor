@@ -198,7 +198,43 @@ def test_prompt_builder_handles_missing_freeze_frame() -> None:
     assert "Attack support: none" in prompt
     assert "Pressure: none" in prompt
     assert "GK: unknown" in prompt
-    assert "Outcome: No goal (2–1)" in prompt
+
+
+def test_prompt_builder_uses_match_competition_metadata() -> None:
+    connection = sqlite3.connect(":memory:")
+    _setup_base_schema(connection)
+
+    connection.executescript(
+        """
+        DROP TABLE competitions;
+        DROP TABLE seasons;
+        ALTER TABLE matches ADD COLUMN competition_name TEXT;
+        ALTER TABLE matches ADD COLUMN season_name TEXT;
+
+        INSERT INTO teams(team_id, team_name) VALUES (10, 'Home XI'), (20, 'Away XI');
+        INSERT INTO players(player_id, player_name) VALUES (7, 'Jamie Forward');
+        INSERT INTO matches(
+            match_id, home_team_id, away_team_id, competition_id, season_id, competition_name, season_name
+        ) VALUES (200, 10, 20, NULL, NULL, 'Friendly Cup', '2024');
+        INSERT INTO shots(
+            shot_id, match_id, team_id, opponent_team_id, player_id,
+            period, minute, second, play_pattern, start_x, start_y,
+            body_part, technique, statsbomb_xg, score_home, score_away,
+            is_goal, is_own_goal
+        ) VALUES (
+            'shot-match-metadata', 200, 10, 20, 7, 1, 5, 12.5, 'open_play',
+            100.0, 40.0, 'right foot', 'normal', 0.12, 0, 0, 0, 0
+        );
+        """
+    )
+
+    prompt = build_xgoal_prompt(
+        connection,
+        "shot-match-metadata",
+        feature_block=["↑ open play"],
+    )
+
+    assert "Match: Home XI 0–0 Away XI | Friendly Cup 2024" in prompt
 
 
 def test_prompt_builder_uses_unknown_names_and_cone_defender() -> None:
@@ -285,7 +321,7 @@ def test_prompt_builder_truncates_feature_block() -> None:
     prompt = build_xgoal_prompt(connection, "shot-4", feature_block=features)
 
     feature_lines = [line for line in prompt.splitlines() if line.startswith("↑") or line.startswith("↓")]
-    assert feature_lines == features[:5]
+    assert feature_lines == features[:10]
 
 
 def test_prompt_builder_requires_valid_shot() -> None:

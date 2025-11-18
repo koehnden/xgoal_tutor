@@ -197,19 +197,40 @@ def _collect_match_metadata(
                     "LEFT JOIN teams AS away ON away.team_id = m.away_team_id",
                 ]
 
+                has_competition_column = _table_has_column(
+                    connection, "matches", "competition_name"
+                )
+                has_season_column = _table_has_column(
+                    connection, "matches", "season_name"
+                )
+
                 if _table_exists(connection, "competitions"):
-                    select_fields.append("comp.competition_name AS competition")
+                    competition_select = (
+                        "COALESCE(comp.competition_name, m.competition_name) AS competition"
+                        if has_competition_column
+                        else "comp.competition_name AS competition"
+                    )
+                    select_fields.append(competition_select)
                     joins.append(
                         "LEFT JOIN competitions AS comp ON comp.competition_id = m.competition_id"
                     )
+                elif has_competition_column:
+                    select_fields.append("m.competition_name AS competition")
                 else:
                     select_fields.append("NULL AS competition")
 
                 if _table_exists(connection, "seasons"):
-                    select_fields.append("seas.season_name AS season")
+                    season_select = (
+                        "COALESCE(seas.season_name, m.season_name) AS season"
+                        if has_season_column
+                        else "seas.season_name AS season"
+                    )
+                    select_fields.append(season_select)
                     joins.append(
                         "LEFT JOIN seasons AS seas ON seas.season_id = m.season_id"
                     )
+                elif has_season_column:
+                    select_fields.append("m.season_name AS season")
                 else:
                     select_fields.append("NULL AS season")
 
@@ -672,4 +693,14 @@ def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
         "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,)
     )
     return cursor.fetchone() is not None
+
+
+def _table_has_column(
+    connection: sqlite3.Connection, table_name: str, column_name: str
+) -> bool:
+    try:
+        cursor = connection.execute(f"PRAGMA table_info({table_name})")
+    except sqlite3.Error:  # pragma: no cover - defensive guard
+        return False
+    return any(row[1] == column_name for row in cursor.fetchall())
 
