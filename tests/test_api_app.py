@@ -11,8 +11,6 @@ import importlib.util
 
 DEFAULT_PRIMARY_MODEL_NAME = "qwen2.5:7b-instruct-q4_0"
 
-# Provide a lightweight stub for xgoal_tutor.api.services so tests do not depend on
-# optional heavy dependencies such as pandas/numpy when the real module is absent.
 if "xgoal_tutor.api.services" not in sys.modules:  # pragma: no cover - import side effect
     try:
         services_spec = importlib.util.find_spec("xgoal_tutor.api.services")
@@ -208,6 +206,36 @@ def test_predict_shots_rejects_empty_shot_list(llm_stub: DummyLLM):
     assert excinfo.value.status_code == 400
     assert excinfo.value.detail == "At least one shot must be provided"
     assert not llm_stub.calls
+
+
+def test_offense_predict_shots_uses_offense_template(
+    llm_stub: DummyLLM, seeded_match_database: Dict[str, str]
+) -> None:
+    shot_payload = _build_shot_payload(shot_id="shot-1")
+    request = ShotPredictionRequest(shots=[ShotFeatures(**shot_payload)])
+
+    response = app_module.offense_predict_shots(request)
+
+    assert response.llm_model == DEFAULT_PRIMARY_MODEL
+    assert len(response.shots) == 1
+    assert llm_stub.calls
+    sent_prompt = llm_stub.calls[-1]["prompt"]
+    assert "Focus only on the attacking team!" in sent_prompt
+
+
+def test_defense_predict_shots_uses_defense_template(
+    llm_stub: DummyLLM, seeded_match_database: Dict[str, str]
+) -> None:
+    shot_payload = _build_shot_payload(shot_id="shot-1")
+    request = ShotPredictionRequest(shots=[ShotFeatures(**shot_payload)])
+
+    response = app_module.defense_predict_shots(request)
+
+    assert response.llm_model == DEFAULT_PRIMARY_MODEL
+    assert len(response.shots) == 1
+    assert llm_stub.calls
+    sent_prompt = llm_stub.calls[-1]["prompt"]
+    assert ("defending team" in sent_prompt) or ("defensive" in sent_prompt)
 
 
 @pytest.fixture
