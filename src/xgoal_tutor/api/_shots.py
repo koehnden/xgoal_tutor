@@ -109,6 +109,13 @@ def _row_to_features(row: sqlite3.Row) -> Dict[str, Any]:
         "follows_dribble": int_to_bool(row_value(row, "follows_dribble")),
         "deflected": int_to_bool(row_value(row, "deflected")),
         "aerial_won": int_to_bool(row_value(row, "aerial_won")),
+        "pass_under_pressure": int_to_bool(row_value(row, "pass_under_pressure")),
+        "pass_height": row_value(row, "pass_height"),
+        "pass_is_cross": int_to_bool(row_value(row, "pass_is_cross")),
+        "pass_is_through_ball": int_to_bool(row_value(row, "pass_is_through_ball")),
+        "pass_is_cutback": int_to_bool(row_value(row, "pass_is_cutback")),
+        "pass_is_switch": int_to_bool(row_value(row, "pass_is_switch")),
+        "assist_type": row_value(row, "assist_type"),
     }
 
 
@@ -176,14 +183,22 @@ def list_match_shot_features(match_id: str) -> Dict[str, Any]:
                     s.aerial_won,
                     s.is_goal,
                     s.is_own_goal,
+                    s.assist_type,
                     ff.ff_opponents,
                     ff.ff_keeper_count,
                     ff.ff_keeper_x,
                     ff.ff_keeper_y,
+                    kp.under_pressure AS pass_under_pressure,
+                    json_extract(kp.raw_json, '$.pass.height.name') AS pass_height,
+                    json_extract(kp.raw_json, '$.pass.cross') AS pass_is_cross,
+                    json_extract(kp.raw_json, '$.pass.through_ball') AS pass_is_through_ball,
+                    json_extract(kp.raw_json, '$.pass.cut_back') AS pass_is_cutback,
+                    json_extract(kp.raw_json, '$.pass.switch') AS pass_is_switch,
                     p.player_name,
                     COALESCE(t.team_name, CASE WHEN s.team_id = ? THEN ? WHEN s.team_id = ? THEN ? ELSE NULL END) AS team_name
                 FROM shots s
                 LEFT JOIN ff ON ff.shot_id = s.shot_id
+                LEFT JOIN events kp ON kp.event_id = s.key_pass_id
                 LEFT JOIN players p ON p.player_id = s.player_id
                 LEFT JOIN teams t ON t.team_id = s.team_id
                 WHERE s.match_id = ?
@@ -278,12 +293,20 @@ def load_shot_features_by_ids(shot_ids: Sequence[str]) -> Dict[str, ShotFeatures
                     s.follows_dribble,
                     s.deflected,
                     s.aerial_won,
+                    s.assist_type,
                     ff.ff_opponents,
                     ff.ff_keeper_count,
                     ff.ff_keeper_x,
-                    ff.ff_keeper_y
+                    ff.ff_keeper_y,
+                    kp.under_pressure AS pass_under_pressure,
+                    json_extract(kp.raw_json, '$.pass.height.name') AS pass_height,
+                    json_extract(kp.raw_json, '$.pass.cross') AS pass_is_cross,
+                    json_extract(kp.raw_json, '$.pass.through_ball') AS pass_is_through_ball,
+                    json_extract(kp.raw_json, '$.pass.cut_back') AS pass_is_cutback,
+                    json_extract(kp.raw_json, '$.pass.switch') AS pass_is_switch
                 FROM shots s
                 LEFT JOIN ff ON ff.shot_id = s.shot_id
+                LEFT JOIN events kp ON kp.event_id = s.key_pass_id
                 WHERE s.shot_id IN ({placeholders})
                 """,
                 tuple(shot_ids) + tuple(shot_ids),

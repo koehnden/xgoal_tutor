@@ -93,5 +93,31 @@ def build_feature_matrix(data: pd.DataFrame) -> pd.DataFrame:
         else:
             X[f"{col}_miss"] = 0
 
+    if "pass_height" in data.columns:
+        X["pass_height_ground"] = (data["pass_height"] == "Ground Pass").astype(int)
+        X["pass_height_low"] = (data["pass_height"] == "Low Pass").astype(int)
+        X["pass_height_high"] = (data["pass_height"] == "High Pass").astype(int)
+    else:
+        X["pass_height_ground"] = 0
+        X["pass_height_low"] = 0
+        X["pass_height_high"] = 0
+
+    for pass_col in ["pass_is_cross", "pass_is_through_ball", "pass_is_cutback", "pass_is_switch"]:
+        if pass_col in data.columns:
+            X[pass_col] = pd.to_numeric(data[pass_col], errors="coerce").fillna(0).astype(int)
+        else:
+            X[pass_col] = 0
+
+    if "pass_under_pressure" in data.columns:
+        X["pass_under_pressure"] = pd.to_numeric(data["pass_under_pressure"], errors="coerce").fillna(0).astype(int)
+    else:
+        X["pass_under_pressure"] = 0
+
+    if "assist_type" in data.columns:
+        assist_type_normalized = data["assist_type"].str.lower().str.replace(" ", "_", regex=False).str.replace("-", "_", regex=False)
+        assist_dummies = pd.get_dummies(assist_type_normalized, prefix="assist_type", dummy_na=False)
+        for col in assist_dummies.columns:
+            X[col] = assist_dummies[col].astype(int)
+    
     X = X.apply(pd.to_numeric, errors="coerce")
     return X
