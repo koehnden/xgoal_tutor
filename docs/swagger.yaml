@@ -122,7 +122,7 @@ paths:
       summary: Enqueue asynchronous tactical summary generation for a match
       description: >
         Produces a tactical summary for each team ("home_team", "away_team") based on individual
-        shot summaries from `predict_shots` and player summaries. Output (when ready) includes
+        shot summaries from `/offense/predict_shots` (or `/defense/predict_shots`) and player summaries. Output (when ready) includes
         "positives", "improvements", "best_player", "improve_player". Returns immediately with a job id.
       operationId: enqueueMatchSummary
       parameters:
@@ -179,7 +179,7 @@ paths:
       summary: Enqueue asynchronous player summary generation for a match
       description: >
         Produces a tactical summary for the specified player in the given match based on individual shot summaries
-        from `predict_shots` where the player was involved. Output (when ready) includes "positives" and "improvements".
+        from `/offense/predict_shots` (or `/defense/predict_shots`) where the player was involved. Output (when ready) includes "positives" and "improvements".
         Returns immediately with a job id.
       operationId: enqueueMatchPlayerSummary
       parameters:
@@ -238,23 +238,62 @@ paths:
         '501':
           description: Match player summary status retrieval is not yet implemented
 
-  /predict_shots:
+  /offense/predict_shots:
     post:
       tags: [Predictions]
-      summary: Predict xG and explanation (synchronous)
+      summary: Predict xG and offense-focused explanation (synchronous)
       description: |
-        Synchronous prediction endpoint. You can optionally override the default LLM prompt
-        by setting `prompt_override`.
+        Synchronous prediction endpoint with an offense-focused explanation prompt.
 
         Supply either inline `shots` payloads (with engineered features) **or** reference
         existing shots via `shot_ids` returned from `/match/{match_id}/shots`.
-      operationId: predictShots
+      operationId: offensePredictShots
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/ShotPredictionRequest'
+            examples:
+              by_ids:
+                value:
+                  shot_ids:
+                    - "039e4f78-c99d-4103-b9cc-1b83eca35b7c"
+      responses:
+        '200':
+          description: Predictions and explanations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShotPredictionResponse'
+        '400':
+          description: At least one shot must be provided
+        '404':
+          description: One or more referenced `shot_ids` could not be located
+        '502':
+          description: Failed to retrieve a response from the LLM
+
+  /defense/predict_shots:
+    post:
+      tags: [Predictions]
+      summary: Predict xG and defense-focused explanation (synchronous)
+      description: |
+        Synchronous prediction endpoint with a defense-focused explanation prompt.
+
+        Supply either inline `shots` payloads (with engineered features) **or** reference
+        existing shots via `shot_ids` returned from `/match/{match_id}/shots`.
+      operationId: defensePredictShots
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShotPredictionRequest'
+            examples:
+              by_ids:
+                value:
+                  shot_ids:
+                    - "039e4f78-c99d-4103-b9cc-1b83eca35b7c"
       responses:
         '200':
           description: Predictions and explanations
@@ -274,7 +313,7 @@ paths:
       tags: [Shots]
       summary: List shots for a match (features + light context; no predictions)
       description: >
-        Returns shot **features** required to call `/predict_shots`, plus light context for UI:
+        Returns shot **features** required to call `/offense/predict_shots` or `/defense/predict_shots`, plus light context for UI:
         `period`, `minute`, `second`, `result`, `scoreline_before`, `scoreline_after`, and the shooter identity.
       operationId: listMatchShotFeatures
       parameters:

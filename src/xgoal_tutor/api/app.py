@@ -255,17 +255,15 @@ def get_match_player_summary_status(match_id: str, player_id: str, generation_id
     raise HTTPException(status_code=501, detail="Match player summary status retrieval is not yet implemented")
 
 
-@app.post("/predict_shots", response_model=ShotPredictionResponse)
-def predict_shots(payload: ShotPredictionRequest) -> ShotPredictionResponse:
+@app.post("/offense/predict_shots", response_model=ShotPredictionResponse)
+def offense_predict_shots(payload: ShotPredictionRequest) -> ShotPredictionResponse:
     """
-    Synchronous xG prediction with a managed prompt (and optional override via the request model).
+    Synchronous xG prediction with an offense-focused managed prompt.
 
     Notes
     -----
-    * This endpoint remains implemented as before.
-    * If your request model now has `prompt_override`, you may later thread it into
-      `generate_llm_explanation(..., prompt_override=payload.prompt_override)`—but do not change
-      the behavior here until you wire up the model/schema accordingly.
+    * Reuses the same pipeline as the general prediction endpoint but forces the
+      offense xGoal prompt template.
     """
     shots: List[ShotFeatures] = list(payload.shots)
     if payload.shot_ids:
@@ -291,6 +289,7 @@ def predict_shots(payload: ShotPredictionRequest) -> ShotPredictionResponse:
             predictions,
             contributions,
             llm_model=payload.llm_model,
+            prompt_template_name="xgoal_offense_prompt.md",
         )
     except RuntimeError as exc:  # pragma: no cover - network error path
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -328,6 +327,89 @@ def predict_shots(payload: ShotPredictionRequest) -> ShotPredictionResponse:
         _MATCH_CACHE[match_id] = cached_response
 
     return response
+
+
+@app.post("/defense/predict_shots", response_model=ShotPredictionResponse)
+def defense_predict_shots(payload: ShotPredictionRequest) -> ShotPredictionResponse:
+    """
+    Synchronous xG prediction with a defense-focused managed prompt.
+
+    Notes
+    -----
+    * Same scoring pipeline; only the LLM prompt template differs.
+    """
+    shots: List[ShotFeatures] = list(payload.shots)
+    if payload.shot_ids:
+        fetched = load_shot_features_by_ids(payload.shot_ids)
+        missing = [shot_id for shot_id in payload.shot_ids if shot_id not in fetched]
+        if missing:
+            missing_list = ", ".join(sorted(missing))
+            raise HTTPException(status_code=404, detail=f"Shot IDs not found: {missing_list}")
+        shots.extend(fetched[shot_id] for shot_id in payload.shot_ids)
+
+    if not shots:
+        raise HTTPException(status_code=400, detail="At least one shot must be provided")
+
+    model = payload.model or DEFAULT_LOGISTIC_REGRESSION_MODEL
+    if model is DEFAULT_LOGISTIC_REGRESSION_MODEL:
+        model = LogisticRegressionModel(**DEFAULT_LOGISTIC_REGRESSION_MODEL.model_dump())
+    predictions, contributions = generate_shot_predictions(shots, model)
+
+    try:
+        llm_responses, model_used = generate_llm_explanation(
+            _LLM_CLIENT,
+            shots,
+            predictions,
+            contributions,
+            llm_model=payload.llm_model,
+            prompt_template_name="xgoal_defense_prompt.md",
+        )
+    except RuntimeError as exc:  # pragma: no cover - network error path
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    resolved_llm_model = model_used or payload.llm_model or DEFAULT_PRIMARY_MODEL
+
+    predictions_with_explanations: List[ShotPrediction] = []
+    for index, prediction in enumerate(predictions):
+        if hasattr(prediction, "model_dump"):
+            data = prediction.model_dump()
+        else:
+            data = prediction.dict()  # type: ignore[attr-defined]
+        data["explanation"] = llm_responses[index]
+        predictions_with_explanations.append(ShotPrediction(**data))
+
+    response = ShotPredictionResponse(
+        shots=predictions_with_explanations,
+        llm_model=resolved_llm_model,
+    )
+
+    for match_id, match_predictions in group_predictions_by_match(predictions_with_explanations).items():
+        cached_response = ShotPredictionResponse(
+            shots=[
+                ShotPrediction(
+                    **(
+                        (
+                            prediction.model_dump()
+                            if hasattr(prediction, "model_dump")
+                            else prediction.dict()  # type: ignore[attr-defined]
+                        )
+                    )
+                )
+                for prediction in match_predictions
+            ],
+            llm_model=resolved_llm_model,
+        )
+        _MATCH_CACHE[match_id] = cached_response
+
+    return response
+
+
+@app.post("/predict_shots", response_model=ShotPredictionResponse)
+def predict_shots(payload: ShotPredictionRequest) -> ShotPredictionResponse:
+    """
+    Backwards-compatible alias for offense-focused predictions.
+    """
+    return offense_predict_shots(payload)
 
 
 @app.get("/match/{match_id}/shots")

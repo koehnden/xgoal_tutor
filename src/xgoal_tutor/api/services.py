@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+import os
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -25,6 +26,13 @@ from xgoal_tutor.modeling.feature_engineering import build_feature_matrix
 
 def create_llm_client() -> OllamaLLM:
     """Initialise an Ollama client with sensible defaults."""
+
+    if os.environ.get("XGOAL_TUTOR_STUB_LLM", "").lower() in {"1", "true", "yes", "on"}:
+        class _StubLLM:
+            def generate(self, prompt: str, model: Optional[str] = None, **_: object) -> tuple[str, str]:
+                return (" stub explanation ", model or DEFAULT_PRIMARY_MODEL)
+
+        return _StubLLM()  # type: ignore[return-value]
 
     config = OllamaConfig(
         primary_model=DEFAULT_PRIMARY_MODEL,
@@ -119,6 +127,7 @@ def generate_llm_explanation(
     *,
     llm_model: Optional[str] = None,
     prompt_override: Optional[str] = None,
+    prompt_template_name: Optional[str] = None,
 
 ) -> Tuple[List[str], str]:
     """Create explanations for the predictions via the configured LLM."""
@@ -127,7 +136,9 @@ def generate_llm_explanation(
     if prompt_override is not None:
         prompts = [prompt_override]
     else:
-        prompts = _build_xgoal_prompts(shots, predictions, contributions)
+        prompts = _build_xgoal_prompts(
+            shots, predictions, contributions, template_name=prompt_template_name or "xgoal_offense_prompt.md"
+        )
 
     explanations: List[str] = []
     model_used: Optional[str] = None
@@ -164,6 +175,8 @@ def _build_xgoal_prompts(
     shots: Sequence[ShotFeatures],
     predictions: Sequence[ShotPrediction],
     contributions: pd.DataFrame,
+    *,
+    template_name: str = "xgoal_offense_prompt.md",
 ) -> List[str]:
     """Render the xGoal Markdown prompts for the provided shots."""
 
@@ -191,6 +204,7 @@ def _build_xgoal_prompts(
                     connection,
                     str(shot_id),
                     feature_block=feature_block,
+                    template_name=template_name,
                 )
             )
 
