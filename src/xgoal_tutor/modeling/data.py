@@ -34,17 +34,10 @@ SELECT
     ff.ff_opponents,
     ff.ff_keeper_count,
     ff.ff_keeper_x,
-    ff.ff_keeper_y,
-    kp.under_pressure      AS pass_under_pressure,
-    json_extract(kp.raw_json, '$.pass.height.name')      AS pass_height,
-    json_extract(kp.raw_json, '$.pass.cross')            AS pass_is_cross,
-    json_extract(kp.raw_json, '$.pass.through_ball')     AS pass_is_through_ball,
-    json_extract(kp.raw_json, '$.pass.cut_back')         AS pass_is_cutback,
-    json_extract(kp.raw_json, '$.pass.switch')           AS pass_is_switch
+    ff.ff_keeper_y
 FROM shots s
-LEFT JOIN events e  ON e.event_id  = s.shot_id
-LEFT JOIN events kp ON kp.event_id = s.key_pass_id
-LEFT JOIN ff        ON ff.shot_id  = s.shot_id;
+LEFT JOIN events e ON e.event_id = s.shot_id
+LEFT JOIN ff     ON ff.shot_id   = s.shot_id;
 """
 
 

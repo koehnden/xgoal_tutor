@@ -106,7 +106,7 @@ def main() -> int:
         logger.error("No shots remain after filtering.")
         return 1
 
-    feature_matrix = build_feature_matrix(shots_df)
+    feature_matrix = build_feature_matrix(shots_df, db_path=args.database_path)
     groups = shots_df["match_id"] if "match_id" in shots_df.columns else None
     train_indices, test_indices = grouped_train_test_split(
         feature_matrix,

@@ -304,16 +304,7 @@ def seeded_match_database(tmp_path, monkeypatch) -> Dict[str, str]:
                 deflected INTEGER,
                 aerial_won INTEGER,
                 is_goal INTEGER,
-                is_own_goal INTEGER,
-                key_pass_id TEXT,
-                assist_type TEXT
-            );
-            CREATE TABLE events (
-                event_id TEXT PRIMARY KEY,
-                match_id TEXT,
-                type TEXT,
-                under_pressure INTEGER,
-                raw_json TEXT
+                is_own_goal INTEGER
             );
             CREATE TABLE freeze_frames (
                 freeze_frame_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -388,7 +379,7 @@ def seeded_match_database(tmp_path, monkeypatch) -> Dict[str, str]:
         )
 
         connection.execute(
-            "INSERT INTO shots (shot_id, match_id, team_id, opponent_team_id, player_id, period, minute, second, outcome, score_home, score_away, start_x, start_y, is_set_piece, is_corner, is_free_kick, first_time, under_pressure, body_part, freeze_frame_available, freeze_frame_count, one_on_one, open_goal, follows_dribble, deflected, aerial_won, is_goal, is_own_goal, key_pass_id, assist_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO shots (shot_id, match_id, team_id, opponent_team_id, player_id, period, minute, second, outcome, score_home, score_away, start_x, start_y, is_set_piece, is_corner, is_free_kick, first_time, under_pressure, body_part, freeze_frame_available, freeze_frame_count, one_on_one, open_goal, follows_dribble, deflected, aerial_won, is_goal, is_own_goal) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 "shot-1",
                 "match-1",
@@ -418,19 +409,6 @@ def seeded_match_database(tmp_path, monkeypatch) -> Dict[str, str]:
                 0,
                 1,
                 0,
-                "pass-1",
-                "Pass",
-            ),
-        )
-
-        connection.execute(
-            "INSERT INTO events (event_id, match_id, type, under_pressure, raw_json) VALUES (?, ?, ?, ?, ?)",
-            (
-                "pass-1",
-                "match-1",
-                "Pass",
-                0,
-                '{"pass": {"height": {"name": "Ground Pass"}, "cross": false, "through_ball": true, "cut_back": false, "switch": false}}',
             ),
         )
 
