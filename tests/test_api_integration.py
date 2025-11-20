@@ -1,23 +1,243 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any, Dict
+import sqlite3
+import sys
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Dict, Iterable
 
 import pytest
-from starlette.testclient import TestClient
 
 
 @pytest.fixture()
-def api_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def api_client(monkeypatch: pytest.MonkeyPatch) -> Any:
+    # Ensure the package under test is importable when the repository isn't installed.
+    project_src = Path(__file__).resolve().parents[1] / "src"
+    sys.path.insert(0, str(project_src))
+
+    # Build a minimal in-memory database so prompt generation can read shot rows
+    # without relying on the real StatsBomb dataset.
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+
+    connection.executescript(
+        """
+        CREATE TABLE players (
+            player_id INTEGER PRIMARY KEY,
+            player_name TEXT
+        );
+
+        CREATE TABLE teams (
+            team_id INTEGER PRIMARY KEY,
+            team_name TEXT
+        );
+
+        CREATE TABLE shots (
+            shot_id TEXT PRIMARY KEY,
+            match_id TEXT,
+            player_id INTEGER,
+            period INTEGER,
+            minute INTEGER,
+            second REAL,
+            play_pattern TEXT,
+            score_home INTEGER,
+            score_away INTEGER,
+            start_x REAL,
+            start_y REAL,
+            is_goal INTEGER,
+            body_part TEXT,
+            technique TEXT,
+            team_id INTEGER,
+            opponent_team_id INTEGER,
+            statsbomb_xg REAL
+        );
+        """
+    )
+
+    connection.executemany(
+        "INSERT INTO players (player_id, player_name) VALUES (?, ?)",
+        [
+            (10, "Player One"),
+            (11, "Player Two"),
+            (12, "Player Three"),
+        ],
+    )
+
+    connection.executemany(
+        "INSERT INTO teams (team_id, team_name) VALUES (?, ?)",
+        [
+            (1, "Home FC"),
+            (2, "Away FC"),
+        ],
+    )
+
+    connection.executemany(
+        """
+        INSERT INTO shots (
+            shot_id,
+            match_id,
+            player_id,
+            period,
+            minute,
+            second,
+            play_pattern,
+            score_home,
+            score_away,
+            start_x,
+            start_y,
+            is_goal,
+            body_part,
+            technique,
+            team_id,
+            opponent_team_id,
+            statsbomb_xg
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "S1",
+                "M1",
+                10,
+                1,
+                12,
+                30.0,
+                "Open Play",
+                1,
+                0,
+                108.0,
+                38.0,
+                0,
+                "Right Foot",
+                "Normal",
+                1,
+                2,
+                0.25,
+            ),
+            (
+                "/offense/predict_shots-S2",
+                "M2",
+                11,
+                2,
+                45,
+                10.5,
+                "Open Play",
+                0,
+                0,
+                100.0,
+                40.0,
+                0,
+                "Left Foot",
+                "Volley",
+                1,
+                2,
+                0.15,
+            ),
+            (
+                "/defense/predict_shots-S2",
+                "M2",
+                11,
+                2,
+                46,
+                5.5,
+                "Open Play",
+                0,
+                0,
+                102.0,
+                35.0,
+                0,
+                "Left Foot",
+                "Volley",
+                1,
+                2,
+                0.18,
+            ),
+            (
+                "S3",
+                "M3",
+                12,
+                1,
+                5,
+                2.0,
+                "Corner",
+                0,
+                0,
+                95.0,
+                30.0,
+                0,
+                "Head",
+                "Header",
+                2,
+                1,
+                0.12,
+            ),
+        ],
+    )
+
+    @contextmanager
+    def stub_get_db() -> Iterable[sqlite3.Connection]:
+        try:
+            yield connection
+        finally:
+            pass
+
     # Ensure the FastAPI app uses the stub LLM client created in services.create_llm_client
     # by setting the environment flag before importing the app module.
     monkeypatch.setenv("XGOAL_TUTOR_STUB_LLM", "1")
+    monkeypatch.setattr("xgoal_tutor.api.database.get_db", stub_get_db)
+    monkeypatch.setattr("xgoal_tutor.api.services.get_db", stub_get_db)
+
     app_module = importlib.import_module("xgoal_tutor.api.app")
     importlib.reload(app_module)
-    if not callable(app_module.app):
-        pytest.skip("FastAPI app is not ASGI-callable in this environment")
-    client = TestClient(app_module.app)
-    return client
+
+    class _Response:
+        def __init__(self, status_code: int, payload: Dict[str, Any]):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self) -> Dict[str, Any]:
+            return self._payload
+
+    class _SyncClient:
+        def post(self, url: str, json: Dict[str, Any] | None = None) -> _Response:  # type: ignore[override]
+            from fastapi import HTTPException
+            from xgoal_tutor.api.models import ShotPredictionRequest
+
+            handler_map = {
+                "/predict_shots": app_module.predict_shots,
+                "/offense/predict_shots": app_module.offense_predict_shots,
+                "/defense/predict_shots": app_module.defense_predict_shots,
+            }
+
+            handler = handler_map.get(url)
+            if handler is None:
+                return _Response(404, {"detail": "Not found"})
+
+            try:
+                request_model = ShotPredictionRequest(**(json or {}))
+                from xgoal_tutor.api.models import ShotFeatures
+
+                request_model.shots = [
+                    shot if isinstance(shot, ShotFeatures) else ShotFeatures(**shot)
+                    for shot in request_model.shots
+                ]
+                result = handler(request_model)
+                if hasattr(result, "model_dump"):
+                    payload = result.model_dump()
+                    if isinstance(payload, dict) and "shots" in payload:
+                        payload["shots"] = [
+                            shot.model_dump() if hasattr(shot, "model_dump") else shot
+                            for shot in payload["shots"]
+                        ]
+                else:
+                    payload = result.dict()  # type: ignore[attr-defined]
+                return _Response(200, payload)  # type: ignore[arg-type]
+            except HTTPException as exc:  # pragma: no cover - maps FastAPI-style errors
+                detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+                return _Response(exc.status_code, {"detail": detail})
+
+    return _SyncClient()
 
 
 def _shot(min_overrides: Dict[str, Any] | None = None) -> Dict[str, Any]:
