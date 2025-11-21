@@ -26,6 +26,7 @@ from xgoal_tutor.api.services import (
     generate_llm_explanation,
     generate_shot_predictions,
     group_predictions_by_match,
+    _apply_teammate_context,
 )
 
 from xgoal_tutor.api._lineups import get_match_lineups as load_match_lineups
@@ -281,6 +282,7 @@ def offense_predict_shots(payload: ShotPredictionRequest) -> ShotPredictionRespo
     if model is DEFAULT_LOGISTIC_REGRESSION_MODEL:
         model = LogisticRegressionModel(**DEFAULT_LOGISTIC_REGRESSION_MODEL.model_dump())
     predictions, contributions = generate_shot_predictions(shots, model)
+    predictions = _apply_teammate_context(shots, predictions, model)
 
     try:
         llm_responses, model_used = generate_llm_explanation(
@@ -354,6 +356,7 @@ def defense_predict_shots(payload: ShotPredictionRequest) -> ShotPredictionRespo
     if model is DEFAULT_LOGISTIC_REGRESSION_MODEL:
         model = LogisticRegressionModel(**DEFAULT_LOGISTIC_REGRESSION_MODEL.model_dump())
     predictions, contributions = generate_shot_predictions(shots, model)
+    predictions = _apply_teammate_context(shots, predictions, model)
 
     try:
         llm_responses, model_used = generate_llm_explanation(

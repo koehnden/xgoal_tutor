@@ -87,6 +87,7 @@ def build_xgoal_prompt(
     *,
     feature_block: Sequence[str],
     context_block: Optional[str] = None,
+    team_mates_scoring_potential_block: Optional[str] = None,
     template_name: str = "xgoal_offense_prompt.md",
 ) -> str:
     """Construct the structured prompt for a given shot identifier."""
@@ -140,6 +141,8 @@ def build_xgoal_prompt(
     if context_section:
         feature_text = f"{feature_text}\n{context_section}" if feature_text else context_section
 
+    scoring_block = team_mates_scoring_potential_block.strip() if team_mates_scoring_potential_block else "none"
+
     template = load_template(template_name)
     prompt = template.render(
         {
@@ -165,6 +168,7 @@ def build_xgoal_prompt(
             "pressure_line": pressure_line,
             "xg": xg,
             "feature_block": feature_text,
+            "team_mates_scoring_potential_block": scoring_block,
             "shot_outcome": shot_outcome,
         }
     )

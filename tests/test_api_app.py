@@ -222,6 +222,16 @@ def test_offense_predict_shots_uses_offense_template(
     sent_prompt = llm_stub.calls[-1]["prompt"]
     assert "Focus only on the attacking team!" in sent_prompt
 
+    context = services_module._compute_teammate_context(
+        [ShotFeatures(**shot_payload)], [response.shots[0]], DEFAULT_LOGISTIC_REGRESSION_MODEL
+    )[0]
+
+    first = response.shots[0]
+    assert first.team_mate_in_better_position_count == context.team_mate_in_better_position_count
+    assert first.max_teammate_xgoal_diff == pytest.approx(context.max_teammate_xgoal_diff)
+    assert first.teammate_name_with_max_xgoal == context.teammate_name_with_max_xgoal
+    assert len(first.teammate_scoring_potential) == len(context.teammate_scoring_potential)
+
 
 def test_defense_predict_shots_uses_defense_template(
     llm_stub: DummyLLM, seeded_match_database: Dict[str, str]
@@ -236,6 +246,16 @@ def test_defense_predict_shots_uses_defense_template(
     assert llm_stub.calls
     sent_prompt = llm_stub.calls[-1]["prompt"]
     assert ("defending team" in sent_prompt) or ("defensive" in sent_prompt)
+
+    context = services_module._compute_teammate_context(
+        [ShotFeatures(**shot_payload)], [response.shots[0]], DEFAULT_LOGISTIC_REGRESSION_MODEL
+    )[0]
+
+    first = response.shots[0]
+    assert first.team_mate_in_better_position_count == context.team_mate_in_better_position_count
+    assert first.max_teammate_xgoal_diff == pytest.approx(context.max_teammate_xgoal_diff)
+    assert first.teammate_name_with_max_xgoal == context.teammate_name_with_max_xgoal
+    assert len(first.teammate_scoring_potential) == len(context.teammate_scoring_potential)
 
 
 @pytest.fixture
@@ -374,6 +394,7 @@ def seeded_match_database(tmp_path, monkeypatch) -> Dict[str, str]:
             "INSERT INTO players (player_id, player_name) VALUES (?, ?)",
             [
                 ("player-1", "Striker"),
+                ("player-2", "Left Winger"),
                 ("player-3", "Defender"),
             ],
         )
@@ -401,7 +422,7 @@ def seeded_match_database(tmp_path, monkeypatch) -> Dict[str, str]:
                 1,
                 "Right Foot",
                 1,
-                3,
+                5,
                 0,
                 0,
                 0,
@@ -413,10 +434,13 @@ def seeded_match_database(tmp_path, monkeypatch) -> Dict[str, str]:
         )
 
         connection.executemany(
-            "INSERT INTO freeze_frames (shot_id, teammate, keeper, x, y) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO freeze_frames (shot_id, player_id, player_name, teammate, keeper, x, y) VALUES (?, ?, ?, ?, ?, ?, ?)",
             [
-                ("shot-1", 0, 0, 110.0, 30.0),
-                ("shot-1", 1, 1, 120.0, 40.0),
+                ("shot-1", "player-1", "Striker", 1, 0, 104.2, 35.7),
+                ("shot-1", "player-2", "Left Winger", 1, 0, 112.0, 42.0),
+                ("shot-1", "player-3", "Midfielder", 1, 0, 96.0, 32.0),
+                ("shot-1", None, None, 0, 0, 110.0, 30.0),
+                ("shot-1", "keeper-1", "Goalkeeper", 0, 1, 118.0, 40.0),
             ],
         )
 
@@ -551,9 +575,9 @@ def test_list_match_shot_features_returns_contextualised_payload(seeded_match_da
     assert features["first_time"] is True
     assert features["under_pressure"] is True
     assert features["body_part"] == "Right Foot"
-    assert features["ff_keeper_x"] == pytest.approx(120.0)
+    assert features["ff_keeper_x"] == pytest.approx(118.0)
     assert features["ff_keeper_y"] == pytest.approx(40.0)
-    assert features["ff_opponents"] == pytest.approx(1.0)
+    assert features["ff_opponents"] == pytest.approx(2.0)
     assert features["freeze_frame_available"] == 1
     assert features["ff_keeper_count"] == 1
     assert features["one_on_one"] is False

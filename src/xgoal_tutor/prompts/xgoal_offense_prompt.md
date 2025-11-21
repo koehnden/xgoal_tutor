@@ -22,6 +22,7 @@ requires:
   - pressure_line
   - xg
   - feature_block
+  - team_mates_scoring_potential_block
   - shot_outcome
 word_limit: 180
 notes:
@@ -71,7 +72,17 @@ Model xG: {{ "%.3f"|format(xg) }}
 Top factors (↑ raises xG, ↓ lowers xG) from logistic coefficients and raw feature values:
 {{ feature_block }}
 
-Provide a concise explanation referencing the most influential factors. When talking about influential factors use natural 
+You are also a feature set that is based on a simulation of the Xgoal value each attacking teammate would have ball at this moment. 
+This serve as a proxy if the shooter would have been better off passing to the teammate. Use this features in addition to the coefficients above in your explanation!
+The following features are available:
+- team_mate_xg: xG value of the simulated teammate.
+- team_mate_in_better_position_count: Count of attacking team mates in a better position, i.e. with higher xG value.
+- max_teammate_xgoal_diff: Shooter xG value minus the best simulated teammate xG. If negative, there is a higher probability that pass the ball the team mate would have been beneficial.
+- teammate_name_with_max_xgoal: the name of team mate with the highest xG value. Use this if passing is likely to be beneficial to name the team mate that the shooter should pass to.
+Team mates potential to score:
+{{ team_mates_scoring_potential_block }}
+
+Provide a concise explanation referencing the most influential factors. When talking about influential factors use natural
 football language instead using the feature names directly, e.g. say "Shooter’s goal distance" instead of "dist_sb".
 Always include key attacker(s), key defender(s) and the goalkeeper.
 Give advice to the key attackers/positions on how to improve xG next time. Do not give advise to defenders. 
