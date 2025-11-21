@@ -142,6 +142,12 @@ def test_prompt_builder_formats_full_prompt() -> None:
         "shot-1",
         feature_block=feature_block,
         context_block="Set up by a quick one-two on the left.\n",
+        team_mates_scoring_potential_block=(
+            "- team_mate_in_better_position_count: 1\n"
+            "- max_teammate_xgoal_diff: -0.120\n"
+            "- teammate_name_with_max_xgoal: Alex Wing\n"
+            "- Alex Wing: xG 0.468"
+        ),
     )
 
     assert prompt.startswith("You are a football analyst translating xGoal probability model outputs")
@@ -158,6 +164,8 @@ def test_prompt_builder_formats_full_prompt() -> None:
         "Top factors (↑ raises xG, ↓ lowers xG) from logistic coefficients and raw feature values:" in prompt
     )
     assert "Set up by a quick one-two on the left." in prompt
+    assert "Team mates potential to score:" in prompt
+    assert "Alex Wing: xG 0.468" in prompt
     assert "Outcome: Goal for Attacking FC (1–0)" in prompt
 
 

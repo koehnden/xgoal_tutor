@@ -311,3 +311,6 @@ def test_compute_teammate_context_scores_teammates(monkeypatch):
     assert context.team_mate_in_better_position_count == 1
     assert context.max_teammate_xgoal_diff is not None
     assert context.max_teammate_xgoal_diff < 0
+    assert len(context.teammate_scoring_potential) == 2
+    assert context.teammate_scoring_potential[0]["player_name"] == "Finisher"
+    assert context.teammate_scoring_potential[0]["xg"] is not None

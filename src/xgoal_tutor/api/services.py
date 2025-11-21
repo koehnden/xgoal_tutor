@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 import sqlite3
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -134,12 +134,14 @@ class FreezeFramePlayer:
 
 @dataclass
 class TeammateContext:
+    teammate_scoring_potential: List[Dict[str, Optional[float | str]]] = field(default_factory=list)
     team_mate_in_better_position_count: int = 0
     max_teammate_xgoal_diff: Optional[float] = None
     teammate_name_with_max_xgoal: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Optional[float | int | str]]:
         return {
+            "teammate_scoring_potential": self.teammate_scoring_potential,
             "team_mate_in_better_position_count": self.team_mate_in_better_position_count,
             "max_teammate_xgoal_diff": self.max_teammate_xgoal_diff,
             "teammate_name_with_max_xgoal": self.teammate_name_with_max_xgoal,
@@ -176,11 +178,11 @@ def _compute_context_for_shot(
     connection: sqlite3.Connection, shot: ShotFeatures, shooter_xg: float, model: LogisticRegressionModel
 ) -> TeammateContext:
     if not shot.shot_id:
-        return TeammateContext()
+        return TeammateContext(teammate_scoring_potential=[])
 
     players = _load_freeze_frame_players(connection, shot.shot_id)
     if not players:
-        return TeammateContext()
+        return TeammateContext(teammate_scoring_potential=[])
 
     shooter_id = _lookup_shooter_id(connection, shot.shot_id)
     keeper = next((player for player in players if player.keeper), None)
@@ -190,21 +192,36 @@ def _compute_context_for_shot(
 
     teammate_shots = _build_teammate_shots(shot, teammates, opponents, keeper)
     if not teammate_shots:
-        return TeammateContext()
+        return TeammateContext(teammate_scoring_potential=[])
 
     feature_frame = build_feature_dataframe(teammate_shots)
     probabilities, _ = calculate_probabilities(feature_frame, model)
 
+    scoring_potential: List[Dict[str, Optional[float | str]]] = []
+    for prob, teammate in sorted(
+        zip(probabilities.tolist(), teammates), key=lambda entry: entry[0], reverse=True
+    ):
+        scoring_potential.append(
+            {
+                "player_name": teammate.player_name,
+                "xg": float(prob) if prob is not None else None,
+            }
+        )
+
     better_count = int((probabilities > shooter_xg).sum())
     best_prob = float(probabilities.max()) if len(probabilities) else None
     if best_prob is None or math.isnan(best_prob):
-        return TeammateContext(team_mate_in_better_position_count=better_count)
+        return TeammateContext(
+            teammate_scoring_potential=scoring_potential,
+            team_mate_in_better_position_count=better_count,
+        )
 
     best_index = int(probabilities.idxmax())
     best_name = teammates[best_index].player_name
     diff = shooter_xg - best_prob
 
     return TeammateContext(
+        teammate_scoring_potential=scoring_potential,
         team_mate_in_better_position_count=better_count,
         max_teammate_xgoal_diff=diff,
         teammate_name_with_max_xgoal=best_name,
@@ -410,6 +427,7 @@ def _build_xgoal_prompts(
             raw_feature_row = feature_frame.iloc[index] if index < len(feature_frame) else pd.Series(dtype=float)
             feature_block = _format_feature_block(contribution_row, raw_feature_row, limit=10)
             context_block = _format_teammate_context_line(prediction)
+            team_mates_scoring_potential_block = _format_teammate_scoring_potential_block(prediction)
 
             prompts.append(
                 build_xgoal_prompt(
@@ -417,6 +435,7 @@ def _build_xgoal_prompts(
                     str(shot_id),
                     feature_block=feature_block,
                     context_block=context_block,
+                    team_mates_scoring_potential_block=team_mates_scoring_potential_block,
                     template_name=template_name,
                 )
             )
@@ -471,7 +490,7 @@ def _format_teammate_context_line(prediction: ShotPrediction) -> str:
         parts.append(f"Teammates with higher xG: {count}")
 
     best_xg = None
-    if diff is not None:
+    if diff is not None and not math.isnan(diff):
         best_xg = prediction.xg - diff
 
     if best_name:
@@ -483,6 +502,38 @@ def _format_teammate_context_line(prediction: ShotPrediction) -> str:
         parts.append(f"Best teammate xG difference: {diff:.3f}")
 
     return "\n".join(parts)
+
+
+def _format_teammate_scoring_potential_block(prediction: ShotPrediction) -> str:
+    lines: List[str] = []
+    count = prediction.team_mate_in_better_position_count
+    diff = prediction.max_teammate_xgoal_diff
+    best_name = prediction.teammate_name_with_max_xgoal
+
+    lines.append(f"- team_mate_in_better_position_count: {count if count is not None else 0}")
+
+    if diff is None or math.isnan(diff):
+        lines.append("- max_teammate_xgoal_diff: n/a")
+    else:
+        lines.append(f"- max_teammate_xgoal_diff: {diff:+.3f}")
+
+    if best_name:
+        lines.append(f"- teammate_name_with_max_xgoal: {best_name}")
+    else:
+        lines.append("- teammate_name_with_max_xgoal: unknown")
+
+    for entry in prediction.teammate_scoring_potential or []:
+        name = entry.get("player_name") if isinstance(entry, dict) else None
+        if not name and hasattr(entry, "player_name"):
+            name = getattr(entry, "player_name")
+        xg_value = entry.get("xg") if isinstance(entry, dict) else getattr(entry, "xg", None)
+        label = name or "unknown teammate"
+        if xg_value is None or (isinstance(xg_value, float) and (math.isnan(xg_value) or not math.isfinite(xg_value))):
+            lines.append(f"- {label}: xG n/a")
+        else:
+            lines.append(f"- {label}: xG {float(xg_value):.3f}")
+
+    return "\n".join(lines) if lines else "none"
 
 
 def _format_raw_value_for_prompt(value: object) -> str:

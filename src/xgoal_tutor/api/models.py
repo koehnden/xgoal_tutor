@@ -83,6 +83,9 @@ class ShotPrediction(BaseModel):
     match_id: Optional[str]
     xg: float
     reason_codes: List[ReasonCode]
+    teammate_scoring_potential: List[dict] = _list_field(
+        description="List of simulated teammate xG values with names when available"
+    )
     team_mate_in_better_position_count: Optional[int] = Field(
         default=None, description="Count of teammates whose simulated xG exceeds the shooter"
     )

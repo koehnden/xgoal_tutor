@@ -230,6 +230,7 @@ def test_offense_predict_shots_uses_offense_template(
     assert first.team_mate_in_better_position_count == context.team_mate_in_better_position_count
     assert first.max_teammate_xgoal_diff == pytest.approx(context.max_teammate_xgoal_diff)
     assert first.teammate_name_with_max_xgoal == context.teammate_name_with_max_xgoal
+    assert len(first.teammate_scoring_potential) == len(context.teammate_scoring_potential)
 
 
 def test_defense_predict_shots_uses_defense_template(
@@ -254,6 +255,7 @@ def test_defense_predict_shots_uses_defense_template(
     assert first.team_mate_in_better_position_count == context.team_mate_in_better_position_count
     assert first.max_teammate_xgoal_diff == pytest.approx(context.max_teammate_xgoal_diff)
     assert first.teammate_name_with_max_xgoal == context.teammate_name_with_max_xgoal
+    assert len(first.teammate_scoring_potential) == len(context.teammate_scoring_potential)
 
 
 @pytest.fixture
