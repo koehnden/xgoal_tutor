@@ -264,7 +264,7 @@ def test_compute_teammate_context_scores_teammates(monkeypatch):
         ("shot-ctx", "player-11", "Finisher", 1, 0, 112.0, 40.0),
         ("shot-ctx", "player-12", "Support", 1, 0, 96.0, 35.0),
         ("shot-ctx", "player-99", "Goalkeeper", 0, 1, 118.0, 40.0),
-        ("shot-ctx", "player-20", "Defender", 0, 0, 105.0, 38.0),
+        ("shot-ctx", "player-20", "Defender", 0, 0, 114.0, 38.0),
     ]
 
     connection.executemany(
@@ -314,3 +314,117 @@ def test_compute_teammate_context_scores_teammates(monkeypatch):
     assert len(context.teammate_scoring_potential) == 2
     assert context.teammate_scoring_potential[0]["player_name"] == "Finisher"
     assert context.teammate_scoring_potential[0]["xg"] is not None
+
+
+def test_is_offside_handles_positions():
+    from xgoal_tutor.api.services import FreezeFramePlayer, is_offside
+
+    shooter_x = 100.0
+    opponents = [
+        FreezeFramePlayer(player_id="o1", player_name="Def1", teammate=False, keeper=False, x=110.0, y=40.0),
+        FreezeFramePlayer(player_id="o2", player_name="Def2", teammate=False, keeper=False, x=112.0, y=38.0),
+    ]
+    keeper = FreezeFramePlayer(player_id="ok", player_name="Keeper", teammate=False, keeper=True, x=116.0, y=40.0)
+
+    forward = FreezeFramePlayer(
+        player_id="t1", player_name="Forward", teammate=True, keeper=False, x=114.0, y=40.0
+    )
+    trailing = FreezeFramePlayer(
+        player_id="t2", player_name="Mid", teammate=True, keeper=False, x=95.0, y=40.0
+    )
+    inside_line = FreezeFramePlayer(
+        player_id="t3", player_name="Wing", teammate=True, keeper=False, x=111.0, y=40.0
+    )
+
+    assert is_offside(forward, shooter_x, opponents, keeper) is True
+    assert is_offside(trailing, shooter_x, opponents, keeper) is False
+    assert is_offside(inside_line, shooter_x, opponents, keeper) is False
+
+
+def test_offside_teammate_receives_zero_xg(monkeypatch):
+    import sqlite3
+    from contextlib import contextmanager
+
+    connection = sqlite3.connect(":memory:")
+    connection.executescript(
+        """
+        CREATE TABLE shots (
+            shot_id TEXT PRIMARY KEY,
+            match_id TEXT,
+            team_id TEXT,
+            player_id TEXT,
+            start_x REAL,
+            start_y REAL
+        );
+        CREATE TABLE freeze_frames (
+            freeze_frame_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            shot_id TEXT,
+            player_id TEXT,
+            player_name TEXT,
+            teammate INTEGER,
+            keeper INTEGER,
+            x REAL,
+            y REAL
+        );
+        """
+    )
+
+    connection.execute(
+        "INSERT INTO shots (shot_id, match_id, team_id, player_id, start_x, start_y) VALUES (?, ?, ?, ?, ?, ?)",
+        ("shot-off", "match-off", "team-1", "player-10", 100.0, 40.0),
+    )
+
+    freeze_frames = [
+        ("shot-off", "player-10", "Shooter", 1, 0, 100.0, 40.0),
+        ("shot-off", "player-11", "Offside", 1, 0, 114.0, 40.0),
+        ("shot-off", "player-12", "Onside", 1, 0, 101.0, 42.0),
+        ("shot-off", "player-99", "Goalkeeper", 0, 1, 118.0, 40.0),
+        ("shot-off", "player-20", "Defender", 0, 0, 112.0, 39.0),
+        ("shot-off", "player-21", "Defender2", 0, 0, 108.0, 41.0),
+    ]
+
+    connection.executemany(
+        "INSERT INTO freeze_frames (shot_id, player_id, player_name, teammate, keeper, x, y) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        freeze_frames,
+    )
+
+    @contextmanager
+    def fake_get_db():
+        try:
+            yield connection
+        finally:
+            pass
+
+    monkeypatch.setattr(services, "get_db", fake_get_db)
+
+    shot = ShotFeatures(
+        shot_id="shot-off",
+        match_id="match-off",
+        start_x=100.0,
+        start_y=40.0,
+        is_set_piece=False,
+        ff_keeper_x=118.0,
+        ff_keeper_y=40.0,
+    )
+
+    model = LogisticRegressionModel(
+        intercept=-0.1,
+        coefficients={
+            "dist_sb": -0.05,
+            "angle_deg_sb": 0.06,
+            "ff_opponents": -0.02,
+            "is_set_piece": -0.01,
+            "gk_depth_sb": -0.01,
+            "gk_offset_sb": -0.02,
+        },
+    )
+
+    shooter_prediction, _ = generate_shot_predictions([shot], model)
+    context = _compute_teammate_context([shot], shooter_prediction, model)[0]
+
+    offside_entry = next(entry for entry in context.teammate_scoring_potential if entry["player_name"] == "Offside")
+    onside_entry = next(entry for entry in context.teammate_scoring_potential if entry["player_name"] == "Onside")
+
+    assert offside_entry["xg"] == 0
+    assert onside_entry["xg"] is not None and onside_entry["xg"] > 0
+    assert context.team_mate_in_better_position_count >= 0

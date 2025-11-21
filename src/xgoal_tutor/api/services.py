@@ -190,33 +190,42 @@ def _compute_context_for_shot(
     teammates = [player for player in players if player.teammate and not player.keeper]
     teammates = _filter_teammates(teammates, shooter_id, shot.start_x, shot.start_y)
 
-    teammate_shots = _build_teammate_shots(shot, teammates, opponents, keeper)
-    if not teammate_shots:
+    if not teammates:
         return TeammateContext(teammate_scoring_potential=[])
 
-    feature_frame = build_feature_dataframe(teammate_shots)
-    probabilities, _ = calculate_probabilities(feature_frame, model)
+    offside_flags = [is_offside(teammate, shot.start_x, opponents, keeper) for teammate in teammates]
+    onside_teammates = [teammate for teammate, offside in zip(teammates, offside_flags) if not offside]
+    teammate_shots = _build_teammate_shots(shot, onside_teammates, opponents, keeper)
+
+    onside_probabilities: List[float] = []
+    if teammate_shots:
+        feature_frame = build_feature_dataframe(teammate_shots)
+        probabilities, _ = calculate_probabilities(feature_frame, model)
+        onside_probabilities = [float(prob) if prob is not None else 0.0 for prob in probabilities.tolist()]
+
+    probability_values: List[float] = []
+    onside_iter = iter(onside_probabilities)
+    for offside in offside_flags:
+        probability_values.append(0.0 if offside else float(next(onside_iter, 0.0)))
+
+    probability_series = pd.Series(probability_values, dtype=float)
 
     scoring_potential: List[Dict[str, Optional[float | str]]] = []
-    for prob, teammate in sorted(
-        zip(probabilities.tolist(), teammates), key=lambda entry: entry[0], reverse=True
-    ):
-        scoring_potential.append(
-            {
-                "player_name": teammate.player_name,
-                "xg": float(prob) if prob is not None else None,
-            }
-        )
+    for prob, teammate in sorted(zip(probability_values, teammates), key=lambda entry: entry[0], reverse=True):
+        scoring_potential.append({"player_name": teammate.player_name, "xg": float(prob)})
 
-    better_count = int((probabilities > shooter_xg).sum())
-    best_prob = float(probabilities.max()) if len(probabilities) else None
-    if best_prob is None or math.isnan(best_prob):
+    better_count = int((probability_series > shooter_xg).sum())
+    if probability_series.empty:
+        return TeammateContext(teammate_scoring_potential=scoring_potential)
+
+    best_prob = float(probability_series.max())
+    if math.isnan(best_prob):
         return TeammateContext(
             teammate_scoring_potential=scoring_potential,
             team_mate_in_better_position_count=better_count,
         )
 
-    best_index = int(probabilities.idxmax())
+    best_index = int(probability_series.idxmax())
     best_name = teammates[best_index].player_name
     diff = shooter_xg - best_prob
 
@@ -286,6 +295,29 @@ def _filter_teammates(
                 continue
         filtered.append(player)
     return filtered
+
+
+def is_offside(
+    teammate: FreezeFramePlayer,
+    shooter_x: Optional[float],
+    opponents: Sequence[FreezeFramePlayer],
+    keeper: Optional[FreezeFramePlayer],
+) -> bool:
+    if teammate.x is None or shooter_x is None:
+        return False
+    if teammate.x <= shooter_x:
+        return False
+
+    opponent_positions: List[float] = [player.x for player in opponents if player.x is not None]
+    if keeper and keeper.x is not None:
+        opponent_positions.append(keeper.x)
+
+    if len(opponent_positions) < 2:
+        return False
+
+    opponent_positions.sort(reverse=True)
+    second_last_line = opponent_positions[1]
+    return teammate.x > second_last_line
 
 
 def _build_teammate_shots(
