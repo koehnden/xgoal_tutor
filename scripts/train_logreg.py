@@ -204,7 +204,7 @@ def build_splits_from_raw(
         logger.error("No shots remain after filtering.")
         return None
 
-    feature_matrix = build_feature_matrix(data)
+    feature_matrix = build_feature_matrix(data, db_path=db_path)
     groups = data["match_id"] if "match_id" in data.columns else None
     train_idx, test_idx = grouped_train_test_split(
         feature_matrix,

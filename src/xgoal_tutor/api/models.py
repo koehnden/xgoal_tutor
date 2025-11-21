@@ -59,6 +59,9 @@ class ShotFeatures(BaseModel):
     follows_dribble: Optional[bool] = None
     deflected: Optional[bool] = None
     aerial_won: Optional[bool] = None
+    has_cutback: Optional[bool] = None
+    cutback_target_x: Optional[float] = None
+    cutback_target_y: Optional[float] = None
 
     class Config:
         extra = "forbid"
@@ -158,6 +161,7 @@ DEFAULT_LOGISTIC_REGRESSION_MODEL = LogisticRegressionModel(
         "follows_dribble": 0.1475,
         "deflected": -0.1218,
         "aerial_won": -0.0836,
+        "has_cutback": 0.0225,
         "first_time_miss": -0.0582,
         "one_on_one_miss": -0.0419,
         "open_goal_miss": -0.0527,

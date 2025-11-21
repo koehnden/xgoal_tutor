@@ -138,6 +138,35 @@ def test_pipeline_limits_feature_list():
     ]
 
 
+def test_pipeline_surfaces_cutback_feature():
+    llm = FakeLLM()
+    pipeline = ExplanationPipeline(llm, top_features=1)
+
+    match_metadata = {"teams": {"home": "Home FC", "away": "Away FC"}}
+
+    events = [
+        EventExplanationInput(
+            event_id="cutback-1",
+            minute=15,
+            second=45,
+            team="Home FC",
+            player="Alex Nine",
+            xg=0.31,
+            contributions={
+                "has_cutback": 0.9,
+                "angle": 0.2,
+                "defenders_between_ball_and_goal": -0.4,
+            },
+        )
+    ]
+
+    result = pipeline.run(match_metadata, events)
+
+    first_prompt = llm.prompts[0]
+    assert "- has_cutback: +0.900 (higher xG)" in first_prompt
+    assert result.event_explanations[0].explanation == "Explained contributions from has_cutback"
+
+
 def test_normalize_feature_contributions_from_coefficients():
     raw = [
         {"feature": "dist_sb", "coefficient": -0.9},
