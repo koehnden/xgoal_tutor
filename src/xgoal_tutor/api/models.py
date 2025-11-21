@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field as dataclass_field
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -12,6 +13,34 @@ def _list_field(*, description: str):
     if getattr(field, "default_factory", None) is None:
         field = Field(default=list(), description=description)
     return field
+
+
+@dataclass
+class FreezeFramePlayer:
+    player_id: Optional[str]
+    player_name: Optional[str]
+    teammate: bool
+    keeper: bool
+    x: Optional[float]
+    y: Optional[float]
+
+
+@dataclass
+class TeammateContext:
+    teammate_scoring_potential: List[Dict[str, Optional[float | str]]] = dataclass_field(
+        default_factory=list
+    )
+    team_mate_in_better_position_count: int = 0
+    max_teammate_xgoal_diff: Optional[float] = None
+    teammate_name_with_max_xgoal: Optional[str] = None
+
+    def as_dict(self) -> Dict[str, Optional[float | int | str]]:
+        return {
+            "teammate_scoring_potential": self.teammate_scoring_potential,
+            "team_mate_in_better_position_count": self.team_mate_in_better_position_count,
+            "max_teammate_xgoal_diff": self.max_teammate_xgoal_diff,
+            "teammate_name_with_max_xgoal": self.teammate_name_with_max_xgoal,
+        }
 
 
 class LogisticRegressionModel(BaseModel):

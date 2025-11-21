@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from dataclasses import dataclass, field
 import os
 import sqlite3
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -15,10 +14,12 @@ import pandas as pd
 from xgoal_tutor.api.models import (
     DEFAULT_FALLBACK_MODELS,
     DEFAULT_PRIMARY_MODEL,
+    FreezeFramePlayer,
     LogisticRegressionModel,
     ReasonCode,
     ShotFeatures,
     ShotPrediction,
+    TeammateContext,
 )
 from xgoal_tutor.api.database import get_db
 from xgoal_tutor.llm.client import OllamaConfig, OllamaLLM
@@ -120,32 +121,6 @@ def format_reason_codes(
         if len(reason_codes) >= max_reasons:
             break
     return reason_codes
-
-
-@dataclass
-class FreezeFramePlayer:
-    player_id: Optional[str]
-    player_name: Optional[str]
-    teammate: bool
-    keeper: bool
-    x: Optional[float]
-    y: Optional[float]
-
-
-@dataclass
-class TeammateContext:
-    teammate_scoring_potential: List[Dict[str, Optional[float | str]]] = field(default_factory=list)
-    team_mate_in_better_position_count: int = 0
-    max_teammate_xgoal_diff: Optional[float] = None
-    teammate_name_with_max_xgoal: Optional[str] = None
-
-    def as_dict(self) -> Dict[str, Optional[float | int | str]]:
-        return {
-            "teammate_scoring_potential": self.teammate_scoring_potential,
-            "team_mate_in_better_position_count": self.team_mate_in_better_position_count,
-            "max_teammate_xgoal_diff": self.max_teammate_xgoal_diff,
-            "teammate_name_with_max_xgoal": self.teammate_name_with_max_xgoal,
-        }
 
 
 def _compute_teammate_context(

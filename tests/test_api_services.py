@@ -317,7 +317,8 @@ def test_compute_teammate_context_scores_teammates(monkeypatch):
 
 
 def test_is_offside_handles_positions():
-    from xgoal_tutor.api.services import FreezeFramePlayer, is_offside
+    from xgoal_tutor.api.models import FreezeFramePlayer
+    from xgoal_tutor.api.services import is_offside
 
     shooter_x = 100.0
     opponents = [
@@ -342,7 +343,8 @@ def test_is_offside_handles_positions():
 
 
 def test_is_offside_examples_cover_ball_and_defender_lines():
-    from xgoal_tutor.api.services import FreezeFramePlayer, is_offside
+    from xgoal_tutor.api.models import FreezeFramePlayer
+    from xgoal_tutor.api.services import is_offside
 
     shooter_x = 102.0
     opponents = [
