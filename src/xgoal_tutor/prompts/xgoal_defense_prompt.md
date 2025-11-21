@@ -36,6 +36,7 @@ Brief feature glossary used by the model:
 - under_pressure: Whether the shooter was under pressure from defenders.
 - gk_depth_sb: GK depth relative to goal line; gk_offset_sb: GK lateral offset.
 - ff_opponents: Count of nearby defenders in the shooting lane.
+- has_cutback: Flag if a central teammate in front of the ball (towards goal) has a reasonably clear passing lane for a cutback (high-value square/rule-back pass).
 - set-piece and context flags: is_set_piece, is_corner, is_free_kick, first_time, one_on_one, open_goal.
 - *_miss indicates the underlying info was missing in the data.
 
