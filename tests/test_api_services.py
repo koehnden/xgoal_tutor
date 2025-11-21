@@ -341,6 +341,31 @@ def test_is_offside_handles_positions():
     assert is_offside(inside_line, shooter_x, opponents, keeper) is False
 
 
+def test_is_offside_examples_cover_ball_and_defender_lines():
+    from xgoal_tutor.api.services import FreezeFramePlayer, is_offside
+
+    shooter_x = 102.0
+    opponents = [
+        FreezeFramePlayer(player_id="o1", player_name="Def1", teammate=False, keeper=False, x=110.0, y=40.0),
+        FreezeFramePlayer(player_id="o2", player_name="Def2", teammate=False, keeper=False, x=107.0, y=39.0),
+    ]
+    keeper = FreezeFramePlayer(player_id="ok", player_name="Keeper", teammate=False, keeper=True, x=116.0, y=40.0)
+
+    offside_teammate = FreezeFramePlayer(
+        player_id="t1", player_name="Forward", teammate=True, keeper=False, x=118.0, y=40.0
+    )
+    defended_teammate = FreezeFramePlayer(
+        player_id="t2", player_name="Mid", teammate=True, keeper=False, x=109.0, y=42.0
+    )
+    deeper_teammate = FreezeFramePlayer(
+        player_id="t3", player_name="Wing", teammate=True, keeper=False, x=98.0, y=41.0
+    )
+
+    assert is_offside(offside_teammate, shooter_x, opponents, keeper) is True
+    assert is_offside(defended_teammate, shooter_x, opponents, keeper) is False
+    assert is_offside(deeper_teammate, shooter_x, opponents, keeper) is False
+
+
 def test_offside_teammate_receives_zero_xg(monkeypatch):
     import sqlite3
     from contextlib import contextmanager
