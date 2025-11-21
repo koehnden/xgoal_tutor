@@ -152,6 +152,9 @@ def _apply_teammate_context(
 def _compute_context_for_shot(
     connection: sqlite3.Connection, shot: ShotFeatures, shooter_xg: float, model: LogisticRegressionModel
 ) -> TeammateContext:
+
+    simulation_decay = 0.05
+
     if not shot.shot_id:
         return TeammateContext(teammate_scoring_potential=[])
 
@@ -176,7 +179,7 @@ def _compute_context_for_shot(
     if teammate_shots:
         feature_frame = build_feature_dataframe(teammate_shots)
         probabilities, _ = calculate_probabilities(feature_frame, model)
-        onside_probabilities = [float(prob) if prob is not None else 0.0 for prob in probabilities.tolist()]
+        onside_probabilities = [float(prob) - simulation_decay if prob is not None else 0.0 for prob in probabilities.tolist()]
 
     probability_values: List[float] = []
     onside_iter = iter(onside_probabilities)
