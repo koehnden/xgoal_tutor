@@ -453,3 +453,58 @@ def test_offside_teammate_receives_zero_xg(monkeypatch):
     assert offside_entry["xg"] == 0
     assert onside_entry["xg"] is not None and onside_entry["xg"] > 0
     assert context.team_mate_in_better_position_count >= 0
+
+
+def test_adjust_potential_xgoal_with_passlane_reduces_blocked_lane():
+    from xgoal_tutor.api.services import (
+        FreezeFramePlayer,
+        adjust_potential_xgoal_with_passlane,
+    )
+
+    shooter = FreezeFramePlayer(player_id="s", player_name="Shooter", teammate=True, keeper=False, x=100.0, y=40.0)
+    teammate = FreezeFramePlayer(player_id="t", player_name="Runner", teammate=True, keeper=False, x=112.0, y=40.0)
+    opponents = [
+        FreezeFramePlayer(player_id="d1", player_name="Def1", teammate=False, keeper=False, x=106.0, y=40.0),
+        FreezeFramePlayer(player_id="d2", player_name="Def2", teammate=False, keeper=False, x=90.0, y=35.0),
+    ]
+
+    adjusted = adjust_potential_xgoal_with_passlane(0.25, shooter.x, shooter.y, teammate, opponents)
+
+    expected = 0.25 / (1 + math.exp(3.0))
+    assert adjusted == pytest.approx(expected)
+
+
+def test_adjust_potential_xgoal_with_passlane_keeps_open_lane():
+    from xgoal_tutor.api.services import (
+        FreezeFramePlayer,
+        adjust_potential_xgoal_with_passlane,
+    )
+
+    shooter = FreezeFramePlayer(player_id="s", player_name="Shooter", teammate=True, keeper=False, x=100.0, y=40.0)
+    teammate = FreezeFramePlayer(player_id="t", player_name="Runner", teammate=True, keeper=False, x=112.0, y=40.0)
+    opponents = [
+        FreezeFramePlayer(player_id="d1", player_name="Def1", teammate=False, keeper=False, x=104.0, y=46.0),
+        FreezeFramePlayer(player_id="d2", player_name="Def2", teammate=False, keeper=False, x=90.0, y=35.0),
+    ]
+
+    adjusted = adjust_potential_xgoal_with_passlane(0.25, shooter.x, shooter.y, teammate, opponents)
+
+    assert adjusted == pytest.approx(0.25, rel=1e-4)
+
+
+def test_adjust_potential_xgoal_with_passlane_handles_missing_coordinates():
+    from xgoal_tutor.api.services import (
+        FreezeFramePlayer,
+        adjust_potential_xgoal_with_passlane,
+    )
+
+    shooter = FreezeFramePlayer(player_id="s", player_name="Shooter", teammate=True, keeper=False, x=100.0, y=40.0)
+    teammate = FreezeFramePlayer(player_id="t", player_name="Runner", teammate=True, keeper=False, x=112.0, y=40.0)
+    opponents = [
+        FreezeFramePlayer(player_id="d1", player_name="Def1", teammate=False, keeper=False, x=None, y=40.0),
+        FreezeFramePlayer(player_id="d2", player_name="Def2", teammate=False, keeper=False, x=90.0, y=None),
+    ]
+
+    adjusted = adjust_potential_xgoal_with_passlane(0.4, shooter.x, shooter.y, teammate, opponents)
+
+    assert adjusted == pytest.approx(0.4)

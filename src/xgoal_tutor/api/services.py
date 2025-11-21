@@ -208,10 +208,16 @@ def _compute_context_for_shot(
     for offside in offside_flags:
         probability_values.append(0.0 if offside else float(next(onside_iter, 0.0)))
 
-    probability_series = pd.Series(probability_values, dtype=float)
+    adjusted_probabilities: List[float] = []
+    for probability, teammate in zip(probability_values, teammates):
+        adjusted_probabilities.append(
+            adjust_potential_xgoal_with_passlane(probability, shot.start_x, shot.start_y, teammate, opponents)
+        )
+
+    probability_series = pd.Series(adjusted_probabilities, dtype=float)
 
     scoring_potential: List[Dict[str, Optional[float | str]]] = []
-    for prob, teammate in sorted(zip(probability_values, teammates), key=lambda entry: entry[0], reverse=True):
+    for prob, teammate in sorted(zip(adjusted_probabilities, teammates), key=lambda entry: entry[0], reverse=True):
         scoring_potential.append({"player_name": teammate.player_name, "xg": float(prob)})
 
     better_count = int((probability_series > shooter_xg).sum())
@@ -318,6 +324,52 @@ def is_offside(
     opponent_positions.sort(reverse=True)
     second_last_line = opponent_positions[1]
     return teammate.x > second_last_line
+
+
+def adjust_potential_xgoal_with_passlane(
+    raw_xg: float,
+    shooter_x: Optional[float],
+    shooter_y: Optional[float],
+    teammate: FreezeFramePlayer,
+    opponents: Sequence[FreezeFramePlayer],
+    k: float = 3.0,
+    w: float = 1.0,
+) -> float:
+    if shooter_x is None or shooter_y is None or teammate.x is None or teammate.y is None:
+        return raw_xg
+
+    distances: List[float] = []
+    for opponent in opponents:
+        if opponent.x is None or opponent.y is None:
+            continue
+        distances.append(
+            _distance_point_to_segment(
+                opponent.x,
+                opponent.y,
+                shooter_x,
+                shooter_y,
+                teammate.x,
+                teammate.y,
+            )
+        )
+
+    d_min = min(distances) if distances else math.inf
+    p_pass = 1.0 / (1.0 + math.exp(-k * (d_min - w)))
+    return raw_xg * p_pass
+
+
+def _distance_point_to_segment(px: float, py: float, x1: float, y1: float, x2: float, y2: float) -> float:
+    dx = x2 - x1
+    dy = y2 - y1
+    segment_length_sq = dx * dx + dy * dy
+    if math.isclose(segment_length_sq, 0.0):
+        return math.hypot(px - x1, py - y1)
+
+    projection = ((px - x1) * dx + (py - y1) * dy) / segment_length_sq
+    t = min(1.0, max(0.0, projection))
+    proj_x = x1 + t * dx
+    proj_y = y1 + t * dy
+    return math.hypot(px - proj_x, py - proj_y)
 
 
 def _build_teammate_shots(
