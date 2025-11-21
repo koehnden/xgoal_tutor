@@ -41,6 +41,7 @@ Here is a brief description of each feature:
 - gk_depth_sb: GK depth at shot time from freeze-frame (x vs goal line).
 - gk_offset_sb: GK lateral offset from goal centre (y vs centreline).
 - ff_opponents: Count of nearby defenders from freeze-frame.
+- has_cutback: Flag if a central teammate in front of the ball (towards goal) has a reasonably clear passing lane for a cutback (high-value square/rule-back pass).
 - follows_dribble / deflected / open_goal / aerial_won / one_on_one: as defined in data.
 - *_miss: 1 if the underlying field is absent/unknown.
 - intercept: logistic regression intercept.
