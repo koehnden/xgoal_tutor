@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+from dataclasses import dataclass
 import os
+import sqlite3
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -21,6 +23,7 @@ from xgoal_tutor.api.models import (
 from xgoal_tutor.api.database import get_db
 from xgoal_tutor.llm.client import OllamaConfig, OllamaLLM
 from xgoal_tutor.llm.xgoal_prompt_builder import build_xgoal_prompt
+from xgoal_tutor.modeling.constants import GOAL_HALF_WIDTH_SB, GOAL_Y_CENTER_SB, PITCH_LENGTH_SB
 from xgoal_tutor.modeling.feature_engineering import build_feature_matrix
 
 
@@ -119,6 +122,214 @@ def format_reason_codes(
     return reason_codes
 
 
+@dataclass
+class FreezeFramePlayer:
+    player_id: Optional[str]
+    player_name: Optional[str]
+    teammate: bool
+    keeper: bool
+    x: Optional[float]
+    y: Optional[float]
+
+
+@dataclass
+class TeammateContext:
+    team_mate_in_better_position_count: int = 0
+    max_teammate_xgoal_diff: Optional[float] = None
+    teammate_name_with_max_xgoal: Optional[str] = None
+
+    def as_dict(self) -> Dict[str, Optional[float | int | str]]:
+        return {
+            "team_mate_in_better_position_count": self.team_mate_in_better_position_count,
+            "max_teammate_xgoal_diff": self.max_teammate_xgoal_diff,
+            "teammate_name_with_max_xgoal": self.teammate_name_with_max_xgoal,
+        }
+
+
+def _compute_teammate_context(
+    shots: Sequence[ShotFeatures], predictions: Sequence[ShotPrediction], model: LogisticRegressionModel
+) -> List[TeammateContext]:
+    if len(shots) != len(predictions):
+        raise ValueError("Shots and predictions length mismatch")
+
+    contexts: List[TeammateContext] = []
+    with get_db() as connection:
+        connection.row_factory = sqlite3.Row
+        for shot, prediction in zip(shots, predictions):
+            contexts.append(_compute_context_for_shot(connection, shot, prediction.xg, model))
+    return contexts
+
+
+def _apply_teammate_context(
+    shots: Sequence[ShotFeatures], predictions: Sequence[ShotPrediction], model: LogisticRegressionModel
+) -> List[ShotPrediction]:
+    contexts = _compute_teammate_context(shots, predictions, model)
+    enriched: List[ShotPrediction] = []
+    for prediction, context in zip(predictions, contexts):
+        data = prediction.model_dump()
+        data.update(context.as_dict())
+        enriched.append(ShotPrediction(**data))
+    return enriched
+
+
+def _compute_context_for_shot(
+    connection: sqlite3.Connection, shot: ShotFeatures, shooter_xg: float, model: LogisticRegressionModel
+) -> TeammateContext:
+    if not shot.shot_id:
+        return TeammateContext()
+
+    players = _load_freeze_frame_players(connection, shot.shot_id)
+    if not players:
+        return TeammateContext()
+
+    shooter_id = _lookup_shooter_id(connection, shot.shot_id)
+    keeper = next((player for player in players if player.keeper), None)
+    opponents = [player for player in players if not player.teammate and not player.keeper]
+    teammates = [player for player in players if player.teammate and not player.keeper]
+    teammates = _filter_teammates(teammates, shooter_id, shot.start_x, shot.start_y)
+
+    teammate_shots = _build_teammate_shots(shot, teammates, opponents, keeper)
+    if not teammate_shots:
+        return TeammateContext()
+
+    feature_frame = build_feature_dataframe(teammate_shots)
+    probabilities, _ = calculate_probabilities(feature_frame, model)
+
+    better_count = int((probabilities > shooter_xg).sum())
+    best_prob = float(probabilities.max()) if len(probabilities) else None
+    if best_prob is None or math.isnan(best_prob):
+        return TeammateContext(team_mate_in_better_position_count=better_count)
+
+    best_index = int(probabilities.idxmax())
+    best_name = teammates[best_index].player_name
+    diff = shooter_xg - best_prob
+
+    return TeammateContext(
+        team_mate_in_better_position_count=better_count,
+        max_teammate_xgoal_diff=diff,
+        teammate_name_with_max_xgoal=best_name,
+    )
+
+
+def _load_freeze_frame_players(connection: sqlite3.Connection, shot_id: str) -> List[FreezeFramePlayer]:
+    rows = connection.execute(
+        "SELECT player_id, player_name, teammate, keeper, x, y FROM freeze_frames WHERE shot_id = ?",
+        (shot_id,),
+    ).fetchall()
+
+    players: List[FreezeFramePlayer] = []
+    for row in rows:
+        if hasattr(row, "keys"):
+            player_id = row["player_id"]
+            player_name = row["player_name"]
+            teammate = bool(row["teammate"])
+            keeper = bool(row["keeper"])
+            x = row["x"]
+            y = row["y"]
+        else:
+            player_id, player_name, teammate, keeper, x, y = row
+            teammate = bool(teammate)
+            keeper = bool(keeper)
+        players.append(
+            FreezeFramePlayer(
+                player_id=str(player_id) if player_id is not None else None,
+                player_name=player_name if player_name is None or isinstance(player_name, str) else str(player_name),
+                teammate=teammate,
+                keeper=keeper,
+                x=float(x) if x is not None else None,
+                y=float(y) if y is not None else None,
+            )
+        )
+    return players
+
+
+def _lookup_shooter_id(connection: sqlite3.Connection, shot_id: str) -> Optional[str]:
+    try:
+        row = connection.execute("SELECT player_id FROM shots WHERE shot_id = ?", (shot_id,)).fetchone()
+    except sqlite3.Error:
+        return None
+    if not row:
+        return None
+    if hasattr(row, "keys"):
+        value = row["player_id"]
+    else:
+        value = row[0]
+    return str(value) if value is not None else None
+
+
+def _filter_teammates(
+    teammates: Sequence[FreezeFramePlayer], shooter_id: Optional[str], shooter_x: float, shooter_y: float
+) -> List[FreezeFramePlayer]:
+    filtered: List[FreezeFramePlayer] = []
+    for player in teammates:
+        if shooter_id and player.player_id == shooter_id:
+            continue
+        if player.x is not None and player.y is not None:
+            if math.hypot(player.x - shooter_x, player.y - shooter_y) <= 0.5:
+                continue
+        filtered.append(player)
+    return filtered
+
+
+def _build_teammate_shots(
+    template: ShotFeatures,
+    teammates: Sequence[FreezeFramePlayer],
+    opponents: Sequence[FreezeFramePlayer],
+    keeper: Optional[FreezeFramePlayer],
+) -> List[ShotFeatures]:
+    shots: List[ShotFeatures] = []
+    for index, teammate in enumerate(teammates):
+        if teammate.x is None or teammate.y is None:
+            continue
+        opponents_in_cone = _count_opponents_in_cone(teammate, opponents)
+        shots.append(
+            ShotFeatures(
+                shot_id=f"{template.shot_id}-tm-{index}",
+                match_id=template.match_id,
+                start_x=teammate.x,
+                start_y=teammate.y,
+                is_set_piece=bool(template.is_set_piece),
+                is_corner=bool(template.is_corner),
+                is_free_kick=bool(template.is_free_kick),
+                first_time=False,
+                under_pressure=False,
+                body_part=None,
+                ff_keeper_x=keeper.x if keeper else None,
+                ff_keeper_y=keeper.y if keeper else None,
+                ff_opponents=opponents_in_cone,
+                freeze_frame_available=1,
+                ff_keeper_count=1 if keeper else 0,
+                one_on_one=False,
+                open_goal=False,
+                follows_dribble=False,
+                deflected=False,
+                aerial_won=False,
+            )
+        )
+    return shots
+
+
+def _count_opponents_in_cone(teammate: FreezeFramePlayer, opponents: Sequence[FreezeFramePlayer]) -> int:
+    count = 0
+    for opponent in opponents:
+        if opponent.x is None or opponent.y is None or teammate.x is None or teammate.y is None:
+            continue
+        if _is_in_goal_cone(teammate.x, teammate.y, opponent.x, opponent.y):
+            count += 1
+    return count
+
+
+def _is_in_goal_cone(origin_x: float, origin_y: float, target_x: float, target_y: float) -> bool:
+    if target_x <= origin_x:
+        return False
+    left_angle = math.atan2((GOAL_Y_CENTER_SB - GOAL_HALF_WIDTH_SB) - origin_y, PITCH_LENGTH_SB - origin_x)
+    right_angle = math.atan2((GOAL_Y_CENTER_SB + GOAL_HALF_WIDTH_SB) - origin_y, PITCH_LENGTH_SB - origin_x)
+    target_angle = math.atan2(target_y - origin_y, target_x - origin_x)
+    low = min(left_angle, right_angle)
+    high = max(left_angle, right_angle)
+    return low <= target_angle <= high
+
+
 def generate_llm_explanation(
     client: OllamaLLM,
     shots: Sequence[ShotFeatures],
@@ -198,12 +409,14 @@ def _build_xgoal_prompts(
             contribution_row = contributions.iloc[index]
             raw_feature_row = feature_frame.iloc[index] if index < len(feature_frame) else pd.Series(dtype=float)
             feature_block = _format_feature_block(contribution_row, raw_feature_row, limit=10)
+            context_block = _format_teammate_context_line(prediction)
 
             prompts.append(
                 build_xgoal_prompt(
                     connection,
                     str(shot_id),
                     feature_block=feature_block,
+                    context_block=context_block,
                     template_name=template_name,
                 )
             )
@@ -246,6 +459,30 @@ def _format_feature_block(
         lines.append(f"{arrow} {feature} ({value:+.3f}) (raw value:{formatted_raw})")
 
     return lines
+
+
+def _format_teammate_context_line(prediction: ShotPrediction) -> str:
+    count = prediction.team_mate_in_better_position_count
+    diff = prediction.max_teammate_xgoal_diff
+    best_name = prediction.teammate_name_with_max_xgoal
+
+    parts: List[str] = []
+    if count is not None:
+        parts.append(f"Teammates with higher xG: {count}")
+
+    best_xg = None
+    if diff is not None:
+        best_xg = prediction.xg - diff
+
+    if best_name:
+        if best_xg is not None:
+            parts.append(f"Best option: {best_name} (xG {best_xg:.3f})")
+        else:
+            parts.append(f"Best option: {best_name}")
+    elif diff is not None:
+        parts.append(f"Best teammate xG difference: {diff:.3f}")
+
+    return "\n".join(parts)
 
 
 def _format_raw_value_for_prompt(value: object) -> str:

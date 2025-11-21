@@ -83,6 +83,16 @@ class ShotPrediction(BaseModel):
     match_id: Optional[str]
     xg: float
     reason_codes: List[ReasonCode]
+    team_mate_in_better_position_count: Optional[int] = Field(
+        default=None, description="Count of teammates whose simulated xG exceeds the shooter"
+    )
+    max_teammate_xgoal_diff: Optional[float] = Field(
+        default=None,
+        description="Shooter xG minus the best simulated teammate xG",
+    )
+    teammate_name_with_max_xgoal: Optional[str] = Field(
+        default=None, description="Name of the teammate with the highest simulated xG"
+    )
     explanation: Optional[str] = Field(
         default=None,
         description="Natural-language explanation generated for this shot",

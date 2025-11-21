@@ -13,6 +13,7 @@ if getattr(services, "__STUB__", False):
 from xgoal_tutor.api.services import (
     _build_xgoal_prompts,
     _format_feature_block,
+    _compute_teammate_context,
     build_feature_dataframe,
     calculate_probabilities,
     generate_shot_predictions,
@@ -223,3 +224,90 @@ def test_group_predictions_by_match_excludes_missing_ids():
     assert set(grouped.keys()) == {"match-1", "match-2"}
     assert len(grouped["match-1"]) == 2
     assert all(isinstance(item, ShotPrediction) for item in grouped["match-1"])
+
+
+def test_compute_teammate_context_scores_teammates(monkeypatch):
+    import sqlite3
+    from contextlib import contextmanager
+
+    connection = sqlite3.connect(":memory:")
+    connection.executescript(
+        """
+        CREATE TABLE shots (
+            shot_id TEXT PRIMARY KEY,
+            match_id TEXT,
+            team_id TEXT,
+            player_id TEXT,
+            start_x REAL,
+            start_y REAL
+        );
+        CREATE TABLE freeze_frames (
+            freeze_frame_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            shot_id TEXT,
+            player_id TEXT,
+            player_name TEXT,
+            teammate INTEGER,
+            keeper INTEGER,
+            x REAL,
+            y REAL
+        );
+        """
+    )
+
+    connection.execute(
+        "INSERT INTO shots (shot_id, match_id, team_id, player_id, start_x, start_y) VALUES (?, ?, ?, ?, ?, ?)",
+        ("shot-ctx", "match-ctx", "team-1", "player-10", 100.0, 40.0),
+    )
+
+    freeze_frames = [
+        ("shot-ctx", "player-10", "Shooter", 1, 0, 100.0, 40.0),
+        ("shot-ctx", "player-11", "Finisher", 1, 0, 112.0, 40.0),
+        ("shot-ctx", "player-12", "Support", 1, 0, 96.0, 35.0),
+        ("shot-ctx", "player-99", "Goalkeeper", 0, 1, 118.0, 40.0),
+        ("shot-ctx", "player-20", "Defender", 0, 0, 105.0, 38.0),
+    ]
+
+    connection.executemany(
+        "INSERT INTO freeze_frames (shot_id, player_id, player_name, teammate, keeper, x, y) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        freeze_frames,
+    )
+
+    @contextmanager
+    def fake_get_db():
+        try:
+            yield connection
+        finally:
+            pass
+
+    monkeypatch.setattr(services, "get_db", fake_get_db)
+
+    shot = ShotFeatures(
+        shot_id="shot-ctx",
+        match_id="match-ctx",
+        start_x=100.0,
+        start_y=40.0,
+        is_set_piece=False,
+        ff_keeper_x=118.0,
+        ff_keeper_y=40.0,
+    )
+
+    model = LogisticRegressionModel(
+        intercept=-0.1,
+        coefficients={
+            "dist_sb": -0.05,
+            "angle_deg_sb": 0.06,
+            "ff_opponents": -0.02,
+            "is_set_piece": -0.01,
+            "gk_depth_sb": -0.01,
+            "gk_offset_sb": -0.02,
+        },
+    )
+
+    shooter_prediction, _ = generate_shot_predictions([shot], model)
+
+    context = _compute_teammate_context([shot], shooter_prediction, model)[0]
+
+    assert context.teammate_name_with_max_xgoal == "Finisher"
+    assert context.team_mate_in_better_position_count == 1
+    assert context.max_teammate_xgoal_diff is not None
+    assert context.max_teammate_xgoal_diff < 0
