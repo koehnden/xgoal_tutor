@@ -23,6 +23,7 @@ requires:
   - xg
   - feature_block
   - team_mates_scoring_potential_block
+  - move_simulation_block
   - shot_outcome
 word_limit: 180
 notes:
@@ -72,7 +73,7 @@ Model xG: {{ "%.3f"|format(xg) }}
 Top factors (↑ raises xG, ↓ lowers xG) from logistic coefficients and raw feature values:
 {{ feature_block }}
 
-You are also a feature set that is based on a simulation of the Xgoal value each attacking teammate would have ball at this moment. 
+You are also a feature set that is based on a simulation of the Xgoal value each attacking teammate would have ball at this moment.
 This serve as a proxy if the shooter would have been better off passing to the teammate. Use this features in addition to the coefficients above in your explanation!
 The following features are available:
 - team_mate_xg: xG value of the simulated teammate.
@@ -81,6 +82,20 @@ The following features are available:
 - teammate_name_with_max_xgoal: the name of team mate with the highest xG value. Use this if passing is likely to be beneficial to name the team mate that the shooter should pass to.
 Team mates potential to score:
 {{ team_mates_scoring_potential_block }}
+
+You are also given a feature set from simulating whether a short move before shooting could lift xG while defenders and the goalkeeper respond.
+Use these features alongside the coefficients above in your explanation.
+The following features are available:
+- move_simulation_note: Brief summary of whether a better short move exists.
+- move_simulation_current_xg: xG at the original shooting spot.
+- move_simulation_best_xg: Highest xG found after simulating short moves.
+- move_simulation_gain: Difference between the best simulated xG and the original xG.
+- move_simulation_distance_m: Distance in metres of the best move.
+- move_simulation_heading: Heading unit vector for the best move.
+- move_simulation_trace: xG values along the simulated steps.
+- move_simulation_best_point: Best end point on the pitch for the simulated move.
+Best short move simulation:
+{{ move_simulation_block }}
 
 Provide a concise explanation referencing the most influential factors. When talking about influential factors use natural
 football language instead using the feature names directly, e.g. say "Shooter’s goal distance" instead of "dist_sb".
