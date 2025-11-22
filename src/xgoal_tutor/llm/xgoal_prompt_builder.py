@@ -10,6 +10,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from xgoal_tutor.prompts import load_template
 from xgoal_tutor.llm.utils import as_bool, as_int
+from xgoal_tutor.llm.move_simulation import simulate_best_move_with_defaults
 
 
 @dataclass
@@ -79,6 +80,59 @@ def _row_get(row: sqlite3.Row, key: str, default: Optional[object] = None) -> Op
     return default
 
 
+def _build_move_simulation_block(
+    shot_row: sqlite3.Row, freeze_frame_entries: Sequence[_FreezeFrameEntry]
+) -> str:
+    start_x = _row_get(shot_row, "start_x")
+    start_y = _row_get(shot_row, "start_y")
+    if start_x is None or start_y is None or not freeze_frame_entries:
+        return ""
+
+    shooter_id = _row_get(shot_row, "player_id")
+    defenders: List[Tuple[float, float]] = []
+    teammates: List[Tuple[float, float]] = []
+    gk: Optional[Tuple[float, float]] = None
+
+    for entry in freeze_frame_entries:
+        if entry.x is None or entry.y is None:
+            continue
+        point = (float(entry.x), float(entry.y))
+        if entry.keeper and not entry.teammate:
+            gk = point
+        elif entry.teammate:
+            if shooter_id is not None and entry.player_id == shooter_id:
+                continue
+            teammates.append(point)
+        else:
+            defenders.append(point)
+
+    result = simulate_best_move_with_defaults(
+        (float(start_x), float(start_y)), defenders, teammates, gk
+    )
+
+    heading = result.get("best_heading_vec")
+    trace = result.get("xg_trace", [])
+    trace_text = ", ".join(f"{value:.3f}" for value in trace) if trace else ""
+    heading_text = "none" if heading is None else f"({heading[0]:.2f}, {heading[1]:.2f})"
+    gain = float(result.get("xg_gain", 0.0))
+
+    prefix = "shooter can improve xG by moving before shooting" if gain > 0 else "no better short move found"
+
+    best_point = result.get("S_best") or (float(start_x), float(start_y))
+
+    lines = [
+        f"- move_simulation_note: {prefix}",
+        f"- move_simulation_current_xg: {float(result.get('xg_current', 0.0)):.3f}",
+        f"- move_simulation_best_xg: {float(result.get('xg_best', 0.0)):.3f}",
+        f"- move_simulation_gain: {gain:+.3f}",
+        f"- move_simulation_distance_m: {float(result.get('best_distance_m', 0.0)):.1f}",
+        f"- move_simulation_heading: {heading_text}",
+        f"- move_simulation_trace: [{trace_text}]" if trace else "- move_simulation_trace: []",
+        f"- move_simulation_best_point: ({best_point[0]:.1f}, {best_point[1]:.1f})",
+    ]
+    return "\n".join(lines)
+
+
 
 
 def build_xgoal_prompt(
@@ -88,6 +142,7 @@ def build_xgoal_prompt(
     feature_block: Sequence[str],
     context_block: Optional[str] = None,
     team_mates_scoring_potential_block: Optional[str] = None,
+    move_simulation_block: Optional[str] = None,
     template_name: str = "xgoal_offense_prompt.md",
 ) -> str:
     """Construct the structured prompt for a given shot identifier."""
@@ -142,6 +197,8 @@ def build_xgoal_prompt(
         feature_text = f"{feature_text}\n{context_section}" if feature_text else context_section
 
     scoring_block = team_mates_scoring_potential_block.strip() if team_mates_scoring_potential_block else "none"
+    simulation_block = move_simulation_block.strip() if move_simulation_block else _build_move_simulation_block(shot_row, freeze_frame_entries or [])
+    simulation_block = simulation_block if simulation_block else "none"
 
     template = load_template(template_name)
     prompt = template.render(
@@ -169,6 +226,7 @@ def build_xgoal_prompt(
             "xg": xg,
             "feature_block": feature_text,
             "team_mates_scoring_potential_block": scoring_block,
+            "move_simulation_block": simulation_block,
             "shot_outcome": shot_outcome,
         }
     )
