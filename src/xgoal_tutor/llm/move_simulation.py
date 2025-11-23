@@ -23,6 +23,84 @@ GK_MIN_Y = 33.5
 GK_MAX_Y = 46.5
 
 
+def statbomb_coordinate_to_direction(hx: float, hy: float, start_y: float, goal_y: float = GOAL_Y_CENTER_SB) -> str:
+    norm = math.hypot(hx, hy)
+    if norm == 0:
+        return "slight adjustment toward goal center"
+    hx_norm = hx / norm
+    hy_norm = hy / norm
+
+    if start_y > goal_y:
+        far_sign = -1.0
+    elif start_y < goal_y:
+        far_sign = 1.0
+    else:
+        far_sign = 1.0
+
+    toward_far = (hy_norm * far_sign) > 0
+
+    strong_fwd = 0.85
+    fwd = 0.60
+    mid_fwd_low = 0.30
+    y_small = 0.25
+    y_large = 0.60
+    y_centerish = 0.25
+
+    abs_hy = abs(hy_norm)
+
+    if hx_norm >= strong_fwd and abs_hy < y_centerish:
+        return "toward goal center"
+    if hx_norm >= fwd and abs_hy >= y_small and toward_far:
+        return "diagonally toward far-post"
+    if hx_norm >= fwd and abs_hy >= y_small and not toward_far:
+        return "diagonally toward near-post"
+    if mid_fwd_low <= hx_norm < fwd and toward_far:
+        return "angling toward far-post"
+    if mid_fwd_low <= hx_norm < fwd and not toward_far:
+        return "angling toward near-post"
+    if hx_norm < mid_fwd_low and abs_hy >= y_large and toward_far:
+        return "laterally toward far-post"
+    if hx_norm < mid_fwd_low and abs_hy >= y_large and not toward_far:
+        return "laterally toward near-post"
+    return "slight adjustment toward goal center"
+
+
+def make_direction_phrase(start: Sequence[float], end: Sequence[float], start_y: float, goal_y: float = GOAL_Y_CENTER_SB) -> str:
+    start_point = np.asarray(start, dtype=float)
+    end_point = np.asarray(end, dtype=float)
+    forward_gain = max(0.0, end_point[0] - start_point[0])
+
+    if start_y > goal_y:
+        far_sign = -1.0
+    elif start_y < goal_y:
+        far_sign = 1.0
+    else:
+        far_sign = 1.0
+
+    lateral_delta = end_point[1] - start_point[1]
+    lateral_mag = abs(lateral_delta)
+    toward_far = (lateral_delta * far_sign) > 0
+    if lateral_mag < 0.5:
+        side_phrase = "central lane"
+    elif toward_far:
+        side_phrase = "far-post side"
+    else:
+        side_phrase = "near-post side"
+
+    meters_to_goal = max(0.0, PITCH_LENGTH_SB - end_point[0])
+    if meters_to_goal <= 6.0:
+        depth_phrase = "near six-yard line"
+    elif meters_to_goal <= 12.0:
+        depth_phrase = "around penalty spot"
+    elif meters_to_goal <= 18.0:
+        depth_phrase = "near edge of box"
+    else:
+        depth_phrase = "well outside box"
+
+    forward_text = f"~{forward_gain:.0f} m closer to goal"
+    return ", ".join([forward_text, side_phrase, depth_phrase])
+
+
 def _default_logistic_model():
     from xgoal_tutor.api.models import DEFAULT_LOGISTIC_REGRESSION_MODEL
 

@@ -10,7 +10,11 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from xgoal_tutor.prompts import load_template
 from xgoal_tutor.llm.utils import as_bool, as_int
-from xgoal_tutor.llm.move_simulation import simulate_best_move_with_defaults
+from xgoal_tutor.llm.move_simulation import (
+    simulate_best_move_with_defaults,
+    statbomb_coordinate_to_direction,
+    make_direction_phrase,
+)
 
 
 @dataclass
@@ -119,6 +123,12 @@ def _build_move_simulation_block(
     prefix = "shooter can improve xG by moving before shooting" if gain > 0 else "no better short move found"
 
     best_point = result.get("S_best") or (float(start_x), float(start_y))
+    heading_label = statbomb_coordinate_to_direction(
+        float(heading[0]) if heading is not None else 0.0,
+        float(heading[1]) if heading is not None else 0.0,
+        float(start_y),
+    )
+    endpoint_summary = make_direction_phrase((float(start_x), float(start_y)), best_point, float(start_y))
 
     lines = [
         f"- move_simulation_note: {prefix}",
@@ -127,6 +137,8 @@ def _build_move_simulation_block(
         f"- move_simulation_gain: {gain:+.3f}",
         f"- move_simulation_distance_m: {float(result.get('best_distance_m', 0.0)):.1f}",
         f"- move_simulation_heading: {heading_text}",
+        f"- move_simulation_heading_label: {heading_label}",
+        f"- move_simulation_endpoint_summary: {endpoint_summary}",
         f"- move_simulation_trace: [{trace_text}]" if trace else "- move_simulation_trace: []",
         f"- move_simulation_best_point: ({best_point[0]:.1f}, {best_point[1]:.1f})",
     ]

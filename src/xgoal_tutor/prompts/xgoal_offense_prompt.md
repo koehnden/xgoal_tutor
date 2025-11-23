@@ -92,6 +92,8 @@ The following features are available:
 - move_simulation_gain: Difference between the best simulated xG and the original xG.
 - move_simulation_distance_m: Distance in metres of the best move.
 - move_simulation_heading: Heading unit vector for the best move.
+- move_simulation_heading_label: Plain-language label for the best heading direction.
+- move_simulation_endpoint_summary: Short description of the end location of the best move.
 - move_simulation_trace: xG values along the simulated steps.
 - move_simulation_best_point: Best end point on the pitch for the simulated move.
 Best short move simulation:

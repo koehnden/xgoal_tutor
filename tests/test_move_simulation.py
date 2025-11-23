@@ -9,6 +9,8 @@ from xgoal_tutor.llm.move_simulation import (
     assign_marking,
     defender_response_options,
     gk_response_options,
+    statbomb_coordinate_to_direction,
+    make_direction_phrase,
     simulate_one_direction,
 )
 
@@ -88,3 +90,32 @@ def test_simulation_stops_without_gain():
     assert best_xg == pytest.approx(0.32)
     assert trace == [pytest.approx(0.3), pytest.approx(0.32)]
     assert final_point == pytest.approx((101.0, 40.0))
+
+
+@pytest.mark.parametrize(
+    "hx, hy, start_y, expected",
+    [
+        (1.0, 0.0, 30.0, "toward goal center"),
+        (0.8, -0.4, 55.0, "diagonally toward far-post"),
+        (0.8, -0.4, 30.0, "diagonally toward near-post"),
+        (0.25, 0.4, 35.0, "angling toward far-post"),
+        (0.25, 0.4, 55.0, "angling toward near-post"),
+        (0.1, 0.9, 30.0, "laterally toward far-post"),
+        (0.1, 0.9, 55.0, "laterally toward near-post"),
+        (0.0, 0.0, 40.0, "slight adjustment toward goal center"),
+    ],
+)
+def test_statbomb_coordinate_to_direction_labels(hx, hy, start_y, expected):
+    assert statbomb_coordinate_to_direction(hx, hy, start_y) == expected
+
+
+@pytest.mark.parametrize(
+    "start, end, start_y, expected",
+    [
+        ((100.0, 50.0), (110.0, 45.0), 50.0, "~10 m closer to goal, far-post side, around penalty spot"),
+        ((100.0, 30.0), (105.0, 30.2), 30.0, "~5 m closer to goal, central lane, near edge of box"),
+        ((95.0, 30.0), (98.0, 25.0), 30.0, "~3 m closer to goal, near-post side, well outside box"),
+    ],
+)
+def test_make_direction_phrase(start, end, start_y, expected):
+    assert make_direction_phrase(start, end, start_y) == expected
