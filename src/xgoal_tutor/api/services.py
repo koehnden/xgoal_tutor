@@ -498,6 +498,8 @@ def _build_xgoal_prompts(
                     feature_block=feature_block,
                     context_block=context_block,
                     team_mates_scoring_potential_block=team_mates_scoring_potential_block,
+                    max_teammate_xgoal_diff=prediction.max_teammate_xgoal_diff,
+                    teammate_name_with_max_xgoal=prediction.teammate_name_with_max_xgoal,
                     template_name=template_name,
                 )
             )

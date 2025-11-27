@@ -192,8 +192,8 @@ def test_build_xgoal_prompts_render_markdown_template(monkeypatch):
 
     prompts = _build_xgoal_prompts(shots, predictions, contributions)
     assert len(prompts) == 2
-    assert all("You are a football analyst" in prompt for prompt in prompts)
-    assert all("Top factors" in prompt for prompt in prompts)
+    assert all("Elite Offensive Performance Coach" in prompt for prompt in prompts)
+    assert all("Shot Factors (Influencers)" in prompt for prompt in prompts)
     assert all("(raw value:" in prompt for prompt in prompts)
     assert all("---" not in prompt for prompt in prompts)
 
