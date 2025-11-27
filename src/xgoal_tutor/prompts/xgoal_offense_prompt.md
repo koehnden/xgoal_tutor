@@ -111,15 +111,11 @@ Pressure: {{ pressure_line }}
 [VALIDATION] Taking the shot immediately was the correct choice (movement would not have improved xG significantly).
 {% endif %}
 
-**Formatting Rules:**
-- Do NOT use headers like "**The Situation:**" or "**The Verdict:**".
-- Do NOT address the player as "You". Always use their name ("{{ shooter_name }}").
-- Combine the parts into a single, flowing paragraph.
-
 # FEW-SHOT EXAMPLES
 Below are examples of how to translate the data into the final tactical feedback.
 
 ### Example 1: Scenario A (Goal Scored vs Statistical Recommendation)
+**Input Data:**
 ```
 # EVENT DATA
 Match: Union Berlin vs Bayer Leverkusen | 0-1
@@ -168,12 +164,61 @@ Best option: Jonas Hofmann (xG 0.070)
 - Exequiel Alejandro Palacios: xG -0.007
 - Granit Xhaka: xG -0.026
 ```
-
 **Coach Feedback:**
 Alejandro Grimaldo García picked up the ball deep in the left half-space, 25 meters out, facing a dense defensive block with Josip Juranović closing down the shooting lane. Strictly speaking, sliding the ball centrally to Jonas Hofmann would have created a higher probability opening than shooting through such a crowded penalty area. However, Grimaldo backed his technique against the low odds. While finding Hofmann is usually the disciplined play against a set defense, Grimaldo's precision finish rendered the probability model irrelevant this time—an exceptional individual goal.
 
-### Example 2: Scenario B (Missed Pass - Critical Feedback)
+### Example 2: Scenario C (Missed Movement - Critical Feedback)
+**Input Data:**
+```
+# EVENT DATA
+Match: England vs Wales | 0-0
+Time: 1' 37:12
+Shooter: Phil Foden (England)
+Shot Outcome: No goal (0–0)
+Position: Center Forward (Grid: 100.8, 45.1)
+Model xG: 0.057
 
+# RELEVANT ATTACKING PLAYERS 
+Attack support: Harry Kane(0.0m @ +0°), Jude Bellingham(11.8m @ +33°), Kyle Walker(14.9m @ +109°)
+
+# RELEVANT DEFENDING PLAYERS
+GK: Danny Ward at x=116.2, y=41.8
+    (depth=3.8m from goal-line, offset=1.8m)
+Pressure: Gareth Frank Bale(4.0m @ -25°), Aaron Ramsey(5.0m @ +59°), Chris Mepham(6.9m @ +29°), Ethan Ampadu(8.6m @ +31°)
+
+# ANALYSIS FACTORS
+**1. Shot Factors (Influencers):**
+↑ angle_deg_sb (+1.400) (raw value:26.868)
+↓ dist_sb (-1.291) (raw value:16.279)
+↓ ff_opponents (-0.388) (raw value:9)
+↓ first_time_miss (-0.058) (raw value:1)
+↓ gk_depth_sb (-0.054) (raw value:3.8)
+↓ open_goal_miss (-0.053) (raw value:1)
+↓ one_on_one_miss (-0.042) (raw value:1)
+↓ follows_dribble_miss (-0.037) (raw value:1)
+↓ deflected_miss (-0.033) (raw value:1)
+↓ under_pressure_miss (-0.029) (raw value:1)
+Teammates with higher xG: 0
+Best option: Marcus Rashford (xG 0.091)
+
+**2. Decision Analysis (Passing):**
+[VALIDATION] Good decision. No teammate was in a significantly better position to score.
+
+**3. Decision Analysis (Movement):**
+[CRITICAL FEEDBACK] A better movement option was IGNORED.
+- The player SHOULD have dribbled/moved before shooting.
+- Recommended Move: diagonally toward far-post
+- xG Gain from moving: +0.240
+- Details: - move_simulation_note: shooter might improve goal probability by moving instead of shooting at the current position
+- move_simulation_current_xg: 0.163
+- move_simulation_best_xg: 0.403
+- move_simulation_gain: +0.240
+- move_simulation_distance_m: 6.0
+- move_simulation_heading_label: diagonally toward far-post
+- move_simulation_endpoint_summary: ~5 m closer to goal, far-post side, around penalty spot
+```
+**Coach Output:**
+Phil Foden received the ball centrally just outside the box but opted to shoot early against a set defensive block led by Gareth Bale. While no obvious pass was available, shooting from 16 meters with a static wall of defenders is a low-percentage play. The critical miss here was the space available for a carry; a progressive dribble diagonally towards the far post would have shifted the defensive line and allowed him to attack the penalty spot. Driving 5-6 meters into that space turns a speculative effort into a high-probability scoring chance.
 
 
 # INSTRUCTIONS
@@ -190,5 +235,10 @@ Look at the headers in sections 2 and 3 above.
    - If Passing was better: Explicitly say "{{ shooter_name }} had [Teammate Name] open in a better position."
    - If Movement was better: Explicitly say "A short move towards [Direction] would have opened up a better shot opportunity."
    - **Important:** Do not use the numbers (e.g. "0.10 gain") in your text. Translate the gain into natural language like "a much clearer chance."
+
+**Formatting Rules:**
+- Do NOT use headers like "**The Situation:**" or "**The Verdict:**".
+- Do NOT address the player as "You". Always use their name ("{{ shooter_name }}").
+- Combine the parts into a single, flowing paragraph.
 
 [Your analysis here, max {{ word_limit }} words]
