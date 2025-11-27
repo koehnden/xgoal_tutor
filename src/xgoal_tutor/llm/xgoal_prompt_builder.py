@@ -120,7 +120,7 @@ def _build_move_simulation_block(
     heading_text = "none" if heading is None else f"({heading[0]:.2f}, {heading[1]:.2f})"
     gain = float(result.get("xg_gain", 0.0))
 
-    prefix = "shooter can improve xG by moving before shooting" if gain > 0 else "no better short move found"
+    prefix = "shooter might improve goal probability by moving instead of shooting at the current position" if gain > 0 else "no better short move found"
 
     best_point = result.get("S_best") or (float(start_x), float(start_y))
     heading_label = statbomb_coordinate_to_direction(
@@ -136,11 +136,11 @@ def _build_move_simulation_block(
         f"- move_simulation_best_xg: {float(result.get('xg_best', 0.0)):.3f}",
         f"- move_simulation_gain: {gain:+.3f}",
         f"- move_simulation_distance_m: {float(result.get('best_distance_m', 0.0)):.1f}",
-        f"- move_simulation_heading: {heading_text}",
+        # f"- move_simulation_heading: {heading_text}",
         f"- move_simulation_heading_label: {heading_label}",
         f"- move_simulation_endpoint_summary: {endpoint_summary}",
-        f"- move_simulation_trace: [{trace_text}]" if trace else "- move_simulation_trace: []",
-        f"- move_simulation_best_point: ({best_point[0]:.1f}, {best_point[1]:.1f})",
+        # f"- move_simulation_trace: [{trace_text}]" if trace else "- move_simulation_trace: []",
+        # f"- move_simulation_best_point: ({best_point[0]:.1f}, {best_point[1]:.1f})",
     ]
     return "\n".join(lines)
 
