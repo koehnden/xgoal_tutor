@@ -13,3 +13,14 @@ def test_prompts_include_cutback_definition():
 
     assert definition in defense_prompt
     assert definition in offense_prompt
+
+
+def test_offense_prompt_includes_move_simulation_section():
+    prompts_dir = Path("src/xgoal_tutor/prompts")
+    offense_prompt = (prompts_dir / "xgoal_offense_prompt.md").read_text()
+
+    expected = "- move_simulation_note: Brief summary of whether a better short move exists."
+    assert expected in offense_prompt
+
+    label_line = "- move_simulation_heading_label: Plain-language label for the best heading direction."
+    assert label_line in offense_prompt
