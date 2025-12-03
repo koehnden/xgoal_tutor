@@ -391,10 +391,10 @@ def get_prediction_status(generation_id: str = Query(..., description="UUID of t
     404
         If the generation_id does not exist
     """
-    from celery.result import AsyncResult
+    from xgoal_tutor.api.celery_app import celery_app
 
-    # Get task result from Celery
-    task_result = AsyncResult(generation_id)
+    # Get task result from Celery using the configured app
+    task_result = celery_app.AsyncResult(generation_id)
 
     if task_result.state == "PENDING":
         # Task not found or not yet started

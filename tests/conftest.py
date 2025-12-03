@@ -192,6 +192,9 @@ if "celery" not in sys.modules:  # pragma: no cover - import side effect
                 return func
             return decorator
 
+        def AsyncResult(self, task_id: str) -> AsyncResult:
+            return AsyncResult(task_id)
+
     celery_module.Celery = Celery
     celery_module.result = celery_result_module
     sys.modules["celery"] = celery_module
