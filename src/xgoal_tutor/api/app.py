@@ -397,10 +397,8 @@ def get_prediction_status(generation_id: str = Query(..., description="UUID of t
     task_result = celery_app.AsyncResult(generation_id)
 
     if task_result.state == "PENDING":
-        # Task not found or not yet started
-        if not task_result.info:
-            raise HTTPException(status_code=404, detail=f"Job {generation_id} not found")
-
+        # Task is waiting in the broker or has not started yet; treat as queued so
+        # callers can continue polling instead of receiving a 404 for valid jobs.
         return PredictionJobStatusResponse(
             generation_id=generation_id,
             status=JobStatus.QUEUED,
