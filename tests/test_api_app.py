@@ -220,7 +220,7 @@ def test_offense_predict_shots_uses_offense_template(
     assert len(response.shots) == 1
     assert llm_stub.calls
     sent_prompt = llm_stub.calls[-1]["prompt"]
-    assert "Focus only on the attacking team!" in sent_prompt
+    assert "Only address the attacking team" in sent_prompt
 
     context = services_module._compute_teammate_context(
         [ShotFeatures(**shot_payload)], [response.shots[0]], DEFAULT_LOGISTIC_REGRESSION_MODEL

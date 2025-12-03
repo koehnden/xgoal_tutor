@@ -148,25 +148,33 @@ def test_prompt_builder_formats_full_prompt() -> None:
             "- teammate_name_with_max_xgoal: Alex Wing\n"
             "- Alex Wing: xG 0.468"
         ),
+        max_teammate_xgoal_diff=-0.12,
+        teammate_name_with_max_xgoal="Alex Wing",
+        move_simulation_block=(
+            "- move_simulation_note: short move opens space\n"
+            "- move_simulation_current_xg: 0.348\n"
+            "- move_simulation_best_xg: 0.548\n"
+            "- move_simulation_gain: +0.200\n"
+            "- move_simulation_distance_m: 2.0\n"
+            "- move_simulation_heading_label: left channel\n"
+            "- move_simulation_endpoint_summary: edge of the six-yard box"
+        ),
+        move_simulation_gain=0.2,
+        move_simulation_heading_label="left channel",
     )
 
-    assert prompt.startswith("You are a football analyst translating xGoal probability model outputs")
+    assert "You are an Elite Offensive Performance Coach" in prompt
     assert "Jordan Smith" in prompt
-    assert "Match: Attacking FC 1–0 Defensive SC | Champions League 2023/24" in prompt
-    assert "Event: 1’ 23:12 | pattern=open_play" in prompt
-    assert "Shooter: Jordan Smith (Attacking FC), pos=Striker" in prompt
-    assert "GK: Keeper One at x=118.5, y=40.5" in prompt
-    assert "Attack support: Pat Anchor" in prompt
-    assert "Alex Wing" in prompt
-    assert "Centre Back" in prompt
+    assert "Match: Attacking FC vs Defensive SC | 1-0" in prompt
+    assert "Time: 1' 23:12" in prompt
+    assert "Position: Striker (Grid: 102.0, 38.0)" in prompt
     assert "Model xG: 0.348" in prompt
-    assert (
-        "Top factors (↑ raises xG, ↓ lowers xG) from logistic coefficients and raw feature values:" in prompt
-    )
-    assert "Set up by a quick one-two on the left." in prompt
-    assert "Team mates potential to score:" in prompt
-    assert "Alex Wing: xG 0.468" in prompt
-    assert "Outcome: Goal for Attacking FC (1–0)" in prompt
+    assert "[CRITICAL FEEDBACK] A better passing option was IGNORED." in prompt
+    assert "Best Teammate Target: Alex Wing" in prompt
+    assert "Full Context: - team_mate_in_better_position_count" in prompt
+    assert "[CRITICAL FEEDBACK] A better movement option was IGNORED." in prompt
+    assert "Recommended Move: left channel" in prompt
+    assert "Shot Outcome: Goal for Attacking FC (1–0)" in prompt
 
 
 def test_prompt_builder_handles_missing_freeze_frame() -> None:
@@ -203,9 +211,9 @@ def test_prompt_builder_handles_missing_freeze_frame() -> None:
         feature_block=["↑ transition"],
     )
 
-    assert "Attack support: none" in prompt
-    assert "Pressure: none" in prompt
-    assert "GK: unknown" in prompt
+    assert "Match: Attacking FC vs unknown | 2-1" in prompt
+    assert "Model xG: 0.412" in prompt
+    assert "Shot Outcome:" in prompt
 
 
 def test_prompt_builder_uses_match_competition_metadata() -> None:
@@ -242,7 +250,7 @@ def test_prompt_builder_uses_match_competition_metadata() -> None:
         feature_block=["↑ open play"],
     )
 
-    assert "Match: Home XI 0–0 Away XI | Friendly Cup 2024" in prompt
+    assert "Match: Home XI vs Away XI | 0-0" in prompt
 
 
 def test_prompt_builder_uses_unknown_names_and_cone_defender() -> None:
@@ -292,8 +300,7 @@ def test_prompt_builder_uses_unknown_names_and_cone_defender() -> None:
         feature_block=["↑ shot on target"],
     )
 
-    assert "pos=Striker" in prompt
-    assert "Pressure: unknown" in prompt  # defender included via cone rule
+    assert "Position: Striker" in prompt
 
 
 def test_prompt_builder_truncates_feature_block() -> None:

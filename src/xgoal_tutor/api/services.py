@@ -153,7 +153,7 @@ def _compute_context_for_shot(
     connection: sqlite3.Connection, shot: ShotFeatures, shooter_xg: float, model: LogisticRegressionModel
 ) -> TeammateContext:
 
-    simulation_decay = 0.05
+    simulation_decay = 0.025
 
     if not shot.shot_id:
         return TeammateContext(teammate_scoring_potential=[])
@@ -498,6 +498,8 @@ def _build_xgoal_prompts(
                     feature_block=feature_block,
                     context_block=context_block,
                     team_mates_scoring_potential_block=team_mates_scoring_potential_block,
+                    max_teammate_xgoal_diff=prediction.max_teammate_xgoal_diff,
+                    teammate_name_with_max_xgoal=prediction.teammate_name_with_max_xgoal,
                     template_name=template_name,
                 )
             )

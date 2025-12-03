@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 import sqlite3
 from contextlib import contextmanager
-from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from xgoal_tutor.prompts import load_template
@@ -15,19 +14,13 @@ from xgoal_tutor.llm.move_simulation import (
     statbomb_coordinate_to_direction,
     make_direction_phrase,
 )
-
-
-@dataclass
-class _FreezeFrameEntry:
-    """Lightweight representation of a freeze-frame player."""
-
-    player_id: Optional[int]
-    player_name: Optional[str]
-    position_name: Optional[str]
-    teammate: bool
-    keeper: bool
-    x: Optional[float]
-    y: Optional[float]
+from xgoal_tutor.llm.models import (
+    EventMetadata,
+    FreezeFrameEntry,
+    MatchMetadata,
+    MoveSimulationContext,
+    ShooterMetadata,
+)
 
 
 @contextmanager
@@ -42,37 +35,6 @@ def _row_factory(connection: sqlite3.Connection) -> Iterable[None]:
         connection.row_factory = original
 
 
-@dataclass
-class _MatchMetadata:
-    home: str
-    score_home: str
-    score_away: str
-    away: str
-    competition: str
-    season: str
-    home_team_id: Optional[int]
-    away_team_id: Optional[int]
-
-
-@dataclass
-class _EventMetadata:
-    period: str
-    minute: int
-    second: int
-    play_pattern: str
-
-
-@dataclass
-class _ShooterMetadata:
-    name: str
-    team_name: str
-    position: str
-    body_part: str
-    technique: str
-    start_x: float
-    start_y: float
-
-
 def _row_get(row: sqlite3.Row, key: str, default: Optional[object] = None) -> Optional[object]:
     """Safely access a column from a SQLite row."""
 
@@ -84,13 +46,13 @@ def _row_get(row: sqlite3.Row, key: str, default: Optional[object] = None) -> Op
     return default
 
 
-def _build_move_simulation_block(
-    shot_row: sqlite3.Row, freeze_frame_entries: Sequence[_FreezeFrameEntry]
-) -> str:
+def _build_move_simulation_context(
+    shot_row: sqlite3.Row, freeze_frame_entries: Sequence[FreezeFrameEntry]
+) -> MoveSimulationContext:
     start_x = _row_get(shot_row, "start_x")
     start_y = _row_get(shot_row, "start_y")
     if start_x is None or start_y is None or not freeze_frame_entries:
-        return ""
+        return MoveSimulationContext(block="", gain=None, heading_label=None)
 
     shooter_id = _row_get(shot_row, "player_id")
     defenders: List[Tuple[float, float]] = []
@@ -115,12 +77,13 @@ def _build_move_simulation_block(
     )
 
     heading = result.get("best_heading_vec")
-    trace = result.get("xg_trace", [])
-    trace_text = ", ".join(f"{value:.3f}" for value in trace) if trace else ""
-    heading_text = "none" if heading is None else f"({heading[0]:.2f}, {heading[1]:.2f})"
     gain = float(result.get("xg_gain", 0.0))
 
-    prefix = "shooter might improve goal probability by moving instead of shooting at the current position" if gain > 0 else "no better short move found"
+    prefix = (
+        "shooter might improve goal probability by moving instead of shooting at the current position"
+        if gain > 0
+        else "no better short move found"
+    )
 
     best_point = result.get("S_best") or (float(start_x), float(start_y))
     heading_label = statbomb_coordinate_to_direction(
@@ -136,13 +99,12 @@ def _build_move_simulation_block(
         f"- move_simulation_best_xg: {float(result.get('xg_best', 0.0)):.3f}",
         f"- move_simulation_gain: {gain:+.3f}",
         f"- move_simulation_distance_m: {float(result.get('best_distance_m', 0.0)):.1f}",
-        # f"- move_simulation_heading: {heading_text}",
         f"- move_simulation_heading_label: {heading_label}",
         f"- move_simulation_endpoint_summary: {endpoint_summary}",
-        # f"- move_simulation_trace: [{trace_text}]" if trace else "- move_simulation_trace: []",
-        # f"- move_simulation_best_point: ({best_point[0]:.1f}, {best_point[1]:.1f})",
     ]
-    return "\n".join(lines)
+    return MoveSimulationContext(
+        block="\n".join(lines), gain=gain, heading_label=heading_label
+    )
 
 
 
@@ -155,6 +117,10 @@ def build_xgoal_prompt(
     context_block: Optional[str] = None,
     team_mates_scoring_potential_block: Optional[str] = None,
     move_simulation_block: Optional[str] = None,
+    max_teammate_xgoal_diff: Optional[float] = None,
+    teammate_name_with_max_xgoal: Optional[str] = None,
+    move_simulation_gain: Optional[float] = None,
+    move_simulation_heading_label: Optional[str] = None,
     template_name: str = "xgoal_offense_prompt.md",
 ) -> str:
     """Construct the structured prompt for a given shot identifier."""
@@ -180,7 +146,7 @@ def build_xgoal_prompt(
 
     match_meta = _collect_match_metadata(connection, shot_row)
     event_meta = _collect_event_metadata(shot_row)
-    freeze_frame_entries: Optional[List[_FreezeFrameEntry]] = None
+    freeze_frame_entries: Optional[List[FreezeFrameEntry]] = None
     if _table_exists(connection, "freeze_frames"):
         freeze_frame_entries = _load_freeze_frames(connection, shot_row["shot_id"])
 
@@ -209,8 +175,25 @@ def build_xgoal_prompt(
         feature_text = f"{feature_text}\n{context_section}" if feature_text else context_section
 
     scoring_block = team_mates_scoring_potential_block.strip() if team_mates_scoring_potential_block else "none"
-    simulation_block = move_simulation_block.strip() if move_simulation_block else _build_move_simulation_block(shot_row, freeze_frame_entries or [])
-    simulation_block = simulation_block if simulation_block else "none"
+    if move_simulation_block:
+        simulation_context = MoveSimulationContext(
+            block=move_simulation_block.strip(), gain=None, heading_label=None
+        )
+    else:
+        simulation_context = _build_move_simulation_context(
+            shot_row, freeze_frame_entries or []
+        )
+
+    simulation_block = simulation_context.block if simulation_context.block else "none"
+    move_gain_value = _coerce_number(move_simulation_gain, simulation_context.gain)
+    move_heading_value = (
+        move_simulation_heading_label
+        or simulation_context.heading_label
+        or "unknown"
+    )
+
+    teammate_diff_value = _coerce_number(max_teammate_xgoal_diff, 0.0)
+    teammate_name_value = teammate_name_with_max_xgoal or "unknown"
 
     template = load_template(template_name)
     prompt = template.render(
@@ -240,15 +223,37 @@ def build_xgoal_prompt(
             "team_mates_scoring_potential_block": scoring_block,
             "move_simulation_block": simulation_block,
             "shot_outcome": shot_outcome,
+            "max_teammate_xgoal_diff": teammate_diff_value,
+            "teammate_name_with_max_xgoal": teammate_name_value,
+            "move_simulation_gain": move_gain_value,
+            "move_simulation_heading_label": move_heading_value,
         }
     )
 
     return prompt
 
 
+def _coerce_number(
+    primary_value: Optional[float], fallback_value: Optional[float]
+) -> float:
+    try:
+        if primary_value is not None and math.isfinite(float(primary_value)):
+            return float(primary_value)
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        if fallback_value is not None and math.isfinite(float(fallback_value)):
+            return float(fallback_value)
+    except (TypeError, ValueError):
+        pass
+
+    return 0.0
+
+
 def _collect_match_metadata(
     connection: sqlite3.Connection, shot_row: sqlite3.Row
-) -> _MatchMetadata:
+) -> MatchMetadata:
     match_id = shot_row["match_id"]
 
     home_team: Optional[str] = None
@@ -339,7 +344,7 @@ def _collect_match_metadata(
     score_home = _row_get(shot_row, "score_home")
     score_away = _row_get(shot_row, "score_away")
 
-    return _MatchMetadata(
+    return MatchMetadata(
         home=str(home_team),
         score_home=str(score_home) if score_home is not None else "?",
         score_away=str(score_away) if score_away is not None else "?",
@@ -351,13 +356,13 @@ def _collect_match_metadata(
     )
 
 
-def _collect_event_metadata(shot_row: sqlite3.Row) -> _EventMetadata:
+def _collect_event_metadata(shot_row: sqlite3.Row) -> EventMetadata:
     period_value = _row_get(shot_row, "period")
     period = str(period_value) if period_value is not None else "?"
     minute = int(_row_get(shot_row, "minute", 0) or 0)
     second_value = int(round(float(_row_get(shot_row, "second", 0.0) or 0.0)))
     play_pattern = (_row_get(shot_row, "play_pattern") or "unknown")
-    return _EventMetadata(
+    return EventMetadata(
         period=period,
         minute=minute,
         second=second_value,
@@ -368,8 +373,8 @@ def _collect_event_metadata(shot_row: sqlite3.Row) -> _EventMetadata:
 def _collect_shooter_metadata(
     connection: sqlite3.Connection,
     shot_row: sqlite3.Row,
-    freeze_frames: Sequence[_FreezeFrameEntry],
-) -> _ShooterMetadata:
+    freeze_frames: Sequence[FreezeFrameEntry],
+) -> ShooterMetadata:
     shooter_name = (_row_get(shot_row, "shooter_name") or "unknown")
     team_name = (_row_get(shot_row, "shooter_team_name") or "unknown")
     body_part = (_row_get(shot_row, "body_part") or "unknown")
@@ -397,7 +402,7 @@ def _collect_shooter_metadata(
             _lookup_lineup_position(connection, shot_row, player_id) or "unknown"
         )
 
-    return _ShooterMetadata(
+    return ShooterMetadata(
         name=shooter_name,
         team_name=team_name,
         position=shooter_position,
@@ -409,12 +414,12 @@ def _collect_shooter_metadata(
 
 
 def _resolve_shooter_entry(
-    entries: Sequence[_FreezeFrameEntry],
+    entries: Sequence[FreezeFrameEntry],
     player_id: Optional[int],
     shooter_name: Optional[str],
     fallback_x: float,
     fallback_y: float,
-) -> Optional[_FreezeFrameEntry]:
+) -> Optional[FreezeFrameEntry]:
     if player_id is not None:
         for entry in entries:
             if entry.player_id == player_id:
@@ -425,7 +430,7 @@ def _resolve_shooter_entry(
             if entry.player_name and entry.player_name == shooter_name:
                 return entry
 
-    closest_entry: Optional[_FreezeFrameEntry] = None
+    closest_entry: Optional[FreezeFrameEntry] = None
     closest_distance = float("inf")
     for entry in entries:
         if not entry.teammate or entry.keeper:
@@ -471,9 +476,9 @@ def _lookup_lineup_position(
 
 
 def _format_freeze_frame_blocks(
-    entries: Sequence[_FreezeFrameEntry],
+    entries: Sequence[FreezeFrameEntry],
     shot_row: sqlite3.Row,
-    shooter_meta: _ShooterMetadata,
+    shooter_meta: ShooterMetadata,
 ) -> Tuple[str, str, str]:
     if not entries:
         return ("unknown", "none", "none")
@@ -490,7 +495,7 @@ def _format_freeze_frame_blocks(
 
 def _load_freeze_frames(
     connection: sqlite3.Connection, shot_id: str
-) -> List[_FreezeFrameEntry]:
+) -> List[FreezeFrameEntry]:
     with _row_factory(connection):
         rows = connection.execute(
             """
@@ -502,7 +507,7 @@ def _load_freeze_frames(
         ).fetchall()
 
     return [
-        _FreezeFrameEntry(
+        FreezeFrameEntry(
             player_id=row["player_id"],
             player_name=row["player_name"],
             position_name=row["position_name"],
@@ -515,7 +520,7 @@ def _load_freeze_frames(
     ]
 
 
-def _build_goalkeeper_text(entries: Sequence[_FreezeFrameEntry]) -> str:
+def _build_goalkeeper_text(entries: Sequence[FreezeFrameEntry]) -> str:
     keepers = [entry for entry in entries if entry.keeper]
     if not keepers:
         return "unknown"
@@ -539,7 +544,7 @@ def _build_goalkeeper_text(entries: Sequence[_FreezeFrameEntry]) -> str:
 
 
 def _build_support_line(
-    entries: Sequence[_FreezeFrameEntry],
+    entries: Sequence[FreezeFrameEntry],
     shooter_id: Optional[int],
     shooter_x: float,
     shooter_y: float,
@@ -565,7 +570,7 @@ def _build_support_line(
 
 
 def _build_pressure_line(
-    entries: Sequence[_FreezeFrameEntry], shooter_x: float, shooter_y: float
+    entries: Sequence[FreezeFrameEntry], shooter_x: float, shooter_y: float
 ) -> str:
     defenders_close: List[Tuple[str, float, float]] = []
     defenders_cone: List[Tuple[str, float, float]] = []
@@ -611,7 +616,7 @@ def _build_pressure_line(
 
 
 def _build_scorelines(
-    shot_row: sqlite3.Row, match_meta: _MatchMetadata
+    shot_row: sqlite3.Row, match_meta: MatchMetadata
 ) -> Tuple[Optional[Dict[str, int]], Optional[Dict[str, int]]]:
     score_home = as_int(_row_get(shot_row, "score_home"))
     score_away = as_int(_row_get(shot_row, "score_away"))
@@ -639,7 +644,7 @@ def _build_scorelines(
 
 
 def _resolve_scoring_team(
-    shot_row: sqlite3.Row, match_meta: _MatchMetadata
+    shot_row: sqlite3.Row, match_meta: MatchMetadata
 ) -> Optional[int]:
     team_id = as_int(_row_get(shot_row, "team_id"))
     opponent_team_id = as_int(_row_get(shot_row, "opponent_team_id"))
@@ -661,7 +666,7 @@ def _resolve_scoring_team(
 def _format_shot_outcome(
     scoreline_before: Optional[Dict[str, int]],
     scoreline_after: Optional[Dict[str, int]],
-    match_meta: _MatchMetadata,
+    match_meta: MatchMetadata,
     *,
     is_goal: Optional[object],
 ) -> str:
