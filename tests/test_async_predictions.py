@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Mock Celery before imports
 if "celery" not in sys.modules:
     celery_module = ModuleType("celery")
 
@@ -44,7 +43,6 @@ if "celery" not in sys.modules:
     sys.modules["celery"] = celery_module
     sys.modules["celery.result"] = celery_module.result
 
-# Import after mocking
 from xgoal_tutor.api.models import (
     JobStatus,
     PredictionJobResponse,
@@ -52,7 +50,6 @@ from xgoal_tutor.api.models import (
     ShotPredictionRequest,
 )
 
-# Import app module
 import importlib
 app_module = importlib.import_module("xgoal_tutor.api.app")
 
@@ -79,26 +76,21 @@ class TestAsyncOffensePredictions:
     @patch("xgoal_tutor.api.app.predict_shots_offense_task")
     def test_offense_predict_shots_returns_generation_id(self, mock_task):
         """Test that offense endpoint returns 202 with generation_id."""
-        # Setup mock
         mock_task.apply_async = MagicMock()
 
-        # Build request
         shot_payload = _build_shot_payload()
         request = ShotPredictionRequest(
             shots=[ShotFeatures(**shot_payload)],
         )
 
-        # Call endpoint
         response = app_module.offense_predict_shots(request)
 
-        # Assertions
         assert isinstance(response, PredictionJobResponse)
         assert response.status == JobStatus.QUEUED
         assert response.generation_id is not None
         assert len(response.generation_id) > 0
         assert isinstance(response.created_at, datetime)
 
-        # Verify task was enqueued
         mock_task.apply_async.assert_called_once()
         call_kwargs = mock_task.apply_async.call_args
         assert "task_id" in call_kwargs[1]
@@ -137,7 +129,6 @@ class TestAsyncOffensePredictions:
 
         response = app_module.offense_predict_shots(request)
 
-        # Verify model was serialized
         call_args = mock_task.apply_async.call_args
         shots_data, model_data, llm_model = call_args[1]["args"]
         assert model_data is not None
@@ -180,7 +171,6 @@ class TestAsyncDefensePredictions:
 
         response = app_module.defense_predict_shots(request)
 
-        # Verify LLM model was passed
         call_args = mock_task.apply_async.call_args
         shots_data, model_data, llm_model = call_args[1]["args"]
         assert llm_model == "mistral:7b-instruct-q4_0"
@@ -194,10 +184,9 @@ class TestPredictionStatusPolling:
         """Test polling returns QUEUED status."""
         generation_id = str(uuid.uuid4())
 
-        # Mock pending task
         mock_result = MagicMock()
         mock_result.state = "PENDING"
-        mock_result.info = {"queued": True}  # Make info truthy to avoid 404
+        mock_result.info = {"queued": True}
         mock_async_result_class.return_value = mock_result
 
         response = app_module.get_prediction_status(generation_id)
@@ -229,7 +218,6 @@ class TestPredictionStatusPolling:
 
         generation_id = str(uuid.uuid4())
 
-        # Mock successful result
         mock_result = MagicMock()
         mock_result.state = "SUCCESS"
         mock_result.result = {
@@ -275,9 +263,6 @@ class TestPredictionStatusPolling:
 
     @patch("xgoal_tutor.api.celery_app.celery_app.AsyncResult")
     def test_get_prediction_status_not_found(self, mock_async_result_class):
-        """Test polling returns 404 for non-existent job."""
-        from fastapi import HTTPException
-
         generation_id = str(uuid.uuid4())
 
         mock_result = MagicMock()
@@ -285,10 +270,10 @@ class TestPredictionStatusPolling:
         mock_result.info = None
         mock_async_result_class.return_value = mock_result
 
-        with pytest.raises(HTTPException) as exc_info:
-            app_module.get_prediction_status(generation_id)
+        response = app_module.get_prediction_status(generation_id)
 
-        assert exc_info.value.status_code == 404
+        assert response.generation_id == generation_id
+        assert response.status == JobStatus.QUEUED
 
 
 class TestBackwardCompatibility:

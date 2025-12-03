@@ -74,7 +74,6 @@ if "xgoal_tutor.api.services" not in sys.modules:  # pragma: no cover - import s
             return grouped
 
         def _apply_teammate_context(shots: Any, predictions: Any, model: Any) -> list:
-            # Stub that just returns predictions unchanged
             return predictions
 
         services_stub.create_llm_client = create_llm_client
@@ -157,8 +156,6 @@ def test_predict_shots_endpoint_returns_predictions_and_caches(
     )
 
     response = app_module.predict_shots(request)
-
-    # Verify async response structure
     assert isinstance(response, PredictionJobResponse)
     assert response.status == JobStatus.QUEUED
     assert response.generation_id is not None
@@ -206,8 +203,6 @@ def test_offense_predict_shots_uses_offense_template(
     request = ShotPredictionRequest(shots=[ShotFeatures(**shot_payload)])
 
     response = app_module.offense_predict_shots(request)
-
-    # Verify async response structure
     assert isinstance(response, PredictionJobResponse)
     assert response.status == JobStatus.QUEUED
     assert response.generation_id is not None
@@ -223,13 +218,28 @@ def test_defense_predict_shots_uses_defense_template(
     request = ShotPredictionRequest(shots=[ShotFeatures(**shot_payload)])
 
     response = app_module.defense_predict_shots(request)
-
-    # Verify async response structure
     assert isinstance(response, PredictionJobResponse)
     assert response.status == JobStatus.QUEUED
     assert response.generation_id is not None
 
-    # Note: Template usage is verified in test_async_predictions.py and the actual tasks
+
+def test_get_prediction_status_returns_queued_for_pending(monkeypatch: pytest.MonkeyPatch) -> None:
+    from xgoal_tutor.api.celery_app import celery_app
+    from xgoal_tutor.api.models import JobStatus
+
+    generation_id = "job-queued"
+
+    class PendingAsyncResult:
+        def __init__(self) -> None:
+            self.state = "PENDING"
+            self.info = None
+
+    monkeypatch.setattr(celery_app, "AsyncResult", lambda task_id: PendingAsyncResult())
+
+    response = app_module.get_prediction_status(generation_id)
+
+    assert response.generation_id == generation_id
+    assert response.status == JobStatus.QUEUED
 
 
 @pytest.fixture

@@ -279,39 +279,8 @@ def offense_predict_shots(payload: ShotPredictionRequest) -> PredictionJobRespon
     * This endpoint immediately returns a generation_id and enqueues the prediction
       task. Use GET /predict_shots?generation_id=<UUID> to poll for results.
     """
-    shots: List[ShotFeatures] = list(payload.shots)
-    if payload.shot_ids:
-        fetched = load_shot_features_by_ids(payload.shot_ids)
-        missing = [shot_id for shot_id in payload.shot_ids if shot_id not in fetched]
-        if missing:
-            missing_list = ", ".join(sorted(missing))
-            raise HTTPException(status_code=404, detail=f"Shot IDs not found: {missing_list}")
-        shots.extend(fetched[shot_id] for shot_id in payload.shot_ids)
-
-    if not shots:
-        raise HTTPException(status_code=400, detail="At least one shot must be provided")
-
-    # Generate unique job ID
-    generation_id = str(uuid.uuid4())
-    created_at = datetime.now(timezone.utc)
-
-    # Serialize shots and model for Celery
-    shots_data = [shot.model_dump() for shot in shots]
-    model_data = None
-    if payload.model:
-        model_data = payload.model.model_dump()
-
-    # Enqueue task with custom task_id
-    predict_shots_offense_task.apply_async(
-        args=[shots_data, model_data, payload.llm_model],
-        task_id=generation_id,
-    )
-
-    return PredictionJobResponse(
-        generation_id=generation_id,
-        status=JobStatus.QUEUED,
-        created_at=created_at,
-    )
+    shots = _collect_requested_shots(payload)
+    return _schedule_prediction_task(predict_shots_offense_task, payload, shots)
 
 
 @app.post("/defense/predict_shots", response_model=PredictionJobResponse, status_code=202)
@@ -328,39 +297,8 @@ def defense_predict_shots(payload: ShotPredictionRequest) -> PredictionJobRespon
     * This endpoint immediately returns a generation_id and enqueues the prediction
       task. Use GET /predict_shots?generation_id=<UUID> to poll for results.
     """
-    shots: List[ShotFeatures] = list(payload.shots)
-    if payload.shot_ids:
-        fetched = load_shot_features_by_ids(payload.shot_ids)
-        missing = [shot_id for shot_id in payload.shot_ids if shot_id not in fetched]
-        if missing:
-            missing_list = ", ".join(sorted(missing))
-            raise HTTPException(status_code=404, detail=f"Shot IDs not found: {missing_list}")
-        shots.extend(fetched[shot_id] for shot_id in payload.shot_ids)
-
-    if not shots:
-        raise HTTPException(status_code=400, detail="At least one shot must be provided")
-
-    # Generate unique job ID
-    generation_id = str(uuid.uuid4())
-    created_at = datetime.now(timezone.utc)
-
-    # Serialize shots and model for Celery
-    shots_data = [shot.model_dump() for shot in shots]
-    model_data = None
-    if payload.model:
-        model_data = payload.model.model_dump()
-
-    # Enqueue task with custom task_id
-    predict_shots_defense_task.apply_async(
-        args=[shots_data, model_data, payload.llm_model],
-        task_id=generation_id,
-    )
-
-    return PredictionJobResponse(
-        generation_id=generation_id,
-        status=JobStatus.QUEUED,
-        created_at=created_at,
-    )
+    shots = _collect_requested_shots(payload)
+    return _schedule_prediction_task(predict_shots_defense_task, payload, shots)
 
 
 @app.post("/predict_shots", response_model=PredictionJobResponse, status_code=202)
@@ -393,66 +331,89 @@ def get_prediction_status(generation_id: str = Query(..., description="UUID of t
     """
     from xgoal_tutor.api.celery_app import celery_app
 
-    # Get task result from Celery using the configured app
     task_result = celery_app.AsyncResult(generation_id)
+    state = task_result.state
 
-    if task_result.state == "PENDING":
-        # Task is waiting in the broker or has not started yet; treat as queued so
-        # callers can continue polling instead of receiving a 404 for valid jobs.
-        return PredictionJobStatusResponse(
-            generation_id=generation_id,
-            status=JobStatus.QUEUED,
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
-        )
-
-    elif task_result.state == "STARTED":
-        return PredictionJobStatusResponse(
-            generation_id=generation_id,
-            status=JobStatus.RUNNING,
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
-        )
-
-    elif task_result.state == "SUCCESS":
-        result_data = task_result.result
-
-        # Parse result into ShotPredictionResponse
-        if result_data:
-            prediction_response = ShotPredictionResponse(
-                shots=[ShotPrediction(**shot_data) for shot_data in result_data["shots"]],
-                llm_model=result_data["llm_model"],
-            )
-        else:
-            prediction_response = None
-
-        return PredictionJobStatusResponse(
-            generation_id=generation_id,
-            status=JobStatus.COMPLETED,
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+    if state == "PENDING":
+        return _build_status_response(generation_id, JobStatus.QUEUED)
+    if state == "STARTED":
+        return _build_status_response(generation_id, JobStatus.RUNNING)
+    if state == "SUCCESS":
+        prediction_response = _parse_prediction_result(task_result.result)
+        return _build_status_response(
+            generation_id,
+            JobStatus.COMPLETED,
             result=prediction_response,
         )
-
-    elif task_result.state == "FAILURE":
+    if state == "FAILURE":
         error_msg = str(task_result.info) if task_result.info else "Unknown error"
-
-        return PredictionJobStatusResponse(
-            generation_id=generation_id,
-            status=JobStatus.FAILED,
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+        return _build_status_response(
+            generation_id,
+            JobStatus.FAILED,
             error_message=error_msg,
         )
+    return _build_status_response(generation_id, JobStatus.QUEUED)
 
-    else:
-        # Handle other states (RETRY, REVOKED, etc.)
-        return PredictionJobStatusResponse(
-            generation_id=generation_id,
-            status=JobStatus.QUEUED,
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
-        )
+
+def _collect_requested_shots(payload: ShotPredictionRequest) -> List[ShotFeatures]:
+    shots: List[ShotFeatures] = list(payload.shots)
+    if payload.shot_ids:
+        fetched = load_shot_features_by_ids(payload.shot_ids)
+        missing = [shot_id for shot_id in payload.shot_ids if shot_id not in fetched]
+        if missing:
+            missing_list = ", ".join(sorted(missing))
+            raise HTTPException(status_code=404, detail=f"Shot IDs not found: {missing_list}")
+        shots.extend(fetched[shot_id] for shot_id in payload.shot_ids)
+
+    if not shots:
+        raise HTTPException(status_code=400, detail="At least one shot must be provided")
+    return shots
+
+
+def _schedule_prediction_task(
+    task: Any, payload: ShotPredictionRequest, shots: List[ShotFeatures]
+) -> PredictionJobResponse:
+    generation_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc)
+    shots_data = [shot.model_dump() for shot in shots]
+    model_data = payload.model.model_dump() if payload.model else None
+
+    task.apply_async(
+        args=[shots_data, model_data, payload.llm_model],
+        task_id=generation_id,
+    )
+
+    return PredictionJobResponse(
+        generation_id=generation_id,
+        status=JobStatus.QUEUED,
+        created_at=created_at,
+    )
+
+
+def _build_status_response(
+    generation_id: str,
+    status: JobStatus,
+    result: Optional[ShotPredictionResponse] = None,
+    error_message: Optional[str] = None,
+) -> PredictionJobStatusResponse:
+    timestamp = datetime.now(timezone.utc)
+    return PredictionJobStatusResponse(
+        generation_id=generation_id,
+        status=status,
+        created_at=timestamp,
+        updated_at=timestamp,
+        result=result,
+        error_message=error_message,
+    )
+
+
+def _parse_prediction_result(result_data: Any) -> Optional[ShotPredictionResponse]:
+    if not result_data:
+        return None
+    return ShotPredictionResponse(
+        shots=[ShotPrediction(**shot_data) for shot_data in result_data["shots"]],
+        llm_model=result_data["llm_model"],
+    )
 
 
 @app.get("/match/{match_id}/shots")

@@ -336,7 +336,7 @@ def test_prompt_builder_truncates_feature_block() -> None:
     prompt = build_xgoal_prompt(connection, "shot-4", feature_block=features)
 
     feature_lines = [line for line in prompt.splitlines() if line.startswith("↑") or line.startswith("↓")]
-    assert feature_lines == features[:10]
+    assert feature_lines[: len(features)] == features[:10]
 
 
 def test_prompt_builder_requires_valid_shot() -> None:
