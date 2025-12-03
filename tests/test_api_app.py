@@ -73,10 +73,14 @@ if "xgoal_tutor.api.services" not in sys.modules:  # pragma: no cover - import s
                     grouped[match_id].append(prediction)
             return grouped
 
+        def _apply_teammate_context(shots: Any, predictions: Any, model: Any) -> list:
+            return predictions
+
         services_stub.create_llm_client = create_llm_client
         services_stub.generate_llm_explanation = generate_llm_explanation
         services_stub.generate_shot_predictions = generate_shot_predictions
         services_stub.group_predictions_by_match = group_predictions_by_match
+        services_stub._apply_teammate_context = _apply_teammate_context
         services_stub.__STUB__ = True
         sys.modules["xgoal_tutor.api.services"] = services_stub
 
@@ -142,6 +146,9 @@ def _build_shot_payload(**overrides: Any) -> Dict[str, Any]:
 def test_predict_shots_endpoint_returns_predictions_and_caches(
     llm_stub: DummyLLM, seeded_match_database: Dict[str, str]
 ) -> None:
+    """Test that predict_shots now returns async job response."""
+    from xgoal_tutor.api.models import PredictionJobResponse, JobStatus
+
     shot_payload = _build_shot_payload()
 
     request = ShotPredictionRequest(
@@ -149,32 +156,10 @@ def test_predict_shots_endpoint_returns_predictions_and_caches(
     )
 
     response = app_module.predict_shots(request)
-
-    assert response.llm_model == DEFAULT_PRIMARY_MODEL
-    assert len(response.shots) == 1
-
-    first_shot = response.shots[0]
-
-    if USING_SERVICES_STUB:
-        assert first_shot.explanation == "stub explanation"
-        assert first_shot.xg == pytest.approx(0.25)
-    else:
-        assert first_shot.explanation.strip()
-        expected_predictions, _ = services_module.generate_shot_predictions(
-            [ShotFeatures(**shot_payload)],
-            DEFAULT_LOGISTIC_REGRESSION_MODEL,
-        )
-        assert first_shot.xg == pytest.approx(expected_predictions[0].xg)
-
-    assert llm_stub.calls
-    if USING_SERVICES_STUB:
-        assert "You are a football analyst" in llm_stub.calls[0]["prompt"]
-    else:
-        assert llm_stub.calls[0]["prompt"].strip()
-
-    cached = app_module._MATCH_CACHE[shot_payload["match_id"]]
-    assert cached.shots[0].shot_id == shot_payload["shot_id"]
-    assert cached.shots[0].explanation
+    assert isinstance(response, PredictionJobResponse)
+    assert response.status == JobStatus.QUEUED
+    assert response.generation_id is not None
+    assert response.created_at is not None
 
 
 def test_predict_shots_with_prompt_uses_custom_prompt(llm_stub: DummyLLM):
@@ -211,51 +196,50 @@ def test_predict_shots_rejects_empty_shot_list(llm_stub: DummyLLM):
 def test_offense_predict_shots_uses_offense_template(
     llm_stub: DummyLLM, seeded_match_database: Dict[str, str]
 ) -> None:
+    """Test that offense endpoint returns async job response."""
+    from xgoal_tutor.api.models import PredictionJobResponse, JobStatus
+
     shot_payload = _build_shot_payload(shot_id="shot-1")
     request = ShotPredictionRequest(shots=[ShotFeatures(**shot_payload)])
 
     response = app_module.offense_predict_shots(request)
-
-    assert response.llm_model == DEFAULT_PRIMARY_MODEL
-    assert len(response.shots) == 1
-    assert llm_stub.calls
-    sent_prompt = llm_stub.calls[-1]["prompt"]
-    assert "Only address the attacking team" in sent_prompt
-
-    context = services_module._compute_teammate_context(
-        [ShotFeatures(**shot_payload)], [response.shots[0]], DEFAULT_LOGISTIC_REGRESSION_MODEL
-    )[0]
-
-    first = response.shots[0]
-    assert first.team_mate_in_better_position_count == context.team_mate_in_better_position_count
-    assert first.max_teammate_xgoal_diff == pytest.approx(context.max_teammate_xgoal_diff)
-    assert first.teammate_name_with_max_xgoal == context.teammate_name_with_max_xgoal
-    assert len(first.teammate_scoring_potential) == len(context.teammate_scoring_potential)
+    assert isinstance(response, PredictionJobResponse)
+    assert response.status == JobStatus.QUEUED
+    assert response.generation_id is not None
 
 
 def test_defense_predict_shots_uses_defense_template(
     llm_stub: DummyLLM, seeded_match_database: Dict[str, str]
 ) -> None:
+    """Test that defense endpoint returns async job response."""
+    from xgoal_tutor.api.models import PredictionJobResponse, JobStatus
+
     shot_payload = _build_shot_payload(shot_id="shot-1")
     request = ShotPredictionRequest(shots=[ShotFeatures(**shot_payload)])
 
     response = app_module.defense_predict_shots(request)
+    assert isinstance(response, PredictionJobResponse)
+    assert response.status == JobStatus.QUEUED
+    assert response.generation_id is not None
 
-    assert response.llm_model == DEFAULT_PRIMARY_MODEL
-    assert len(response.shots) == 1
-    assert llm_stub.calls
-    sent_prompt = llm_stub.calls[-1]["prompt"]
-    assert ("defending team" in sent_prompt) or ("defensive" in sent_prompt)
 
-    context = services_module._compute_teammate_context(
-        [ShotFeatures(**shot_payload)], [response.shots[0]], DEFAULT_LOGISTIC_REGRESSION_MODEL
-    )[0]
+def test_get_prediction_status_returns_queued_for_pending(monkeypatch: pytest.MonkeyPatch) -> None:
+    from xgoal_tutor.api.celery_app import celery_app
+    from xgoal_tutor.api.models import JobStatus
 
-    first = response.shots[0]
-    assert first.team_mate_in_better_position_count == context.team_mate_in_better_position_count
-    assert first.max_teammate_xgoal_diff == pytest.approx(context.max_teammate_xgoal_diff)
-    assert first.teammate_name_with_max_xgoal == context.teammate_name_with_max_xgoal
-    assert len(first.teammate_scoring_potential) == len(context.teammate_scoring_potential)
+    generation_id = "job-queued"
+
+    class PendingAsyncResult:
+        def __init__(self) -> None:
+            self.state = "PENDING"
+            self.info = None
+
+    monkeypatch.setattr(celery_app, "AsyncResult", lambda task_id: PendingAsyncResult())
+
+    response = app_module.get_prediction_status(generation_id)
+
+    assert response.generation_id == generation_id
+    assert response.status == JobStatus.QUEUED
 
 
 @pytest.fixture

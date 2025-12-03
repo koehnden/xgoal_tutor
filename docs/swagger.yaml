@@ -241,9 +241,10 @@ paths:
   /offense/predict_shots:
     post:
       tags: [Predictions]
-      summary: Predict xG and offense-focused explanation (synchronous)
+      summary: Enqueue async xG prediction with offense-focused explanation
       description: |
-        Synchronous prediction endpoint with an offense-focused explanation prompt.
+        Asynchronous prediction endpoint with an offense-focused explanation prompt.
+        Returns immediately with a `generation_id` to poll for results.
 
         Supply either inline `shots` payloads (with engineered features) **or** reference
         existing shots via `shot_ids` returned from `/match/{match_id}/shots`.
@@ -260,25 +261,24 @@ paths:
                   shot_ids:
                     - "039e4f78-c99d-4103-b9cc-1b83eca35b7c"
       responses:
-        '200':
-          description: Predictions and explanations
+        '202':
+          description: Prediction job enqueued successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ShotPredictionResponse'
+                $ref: '#/components/schemas/PredictionJobResponse'
         '400':
           description: At least one shot must be provided
         '404':
           description: One or more referenced `shot_ids` could not be located
-        '502':
-          description: Failed to retrieve a response from the LLM
 
   /defense/predict_shots:
     post:
       tags: [Predictions]
-      summary: Predict xG and defense-focused explanation (synchronous)
+      summary: Enqueue async xG prediction with defense-focused explanation
       description: |
-        Synchronous prediction endpoint with a defense-focused explanation prompt.
+        Asynchronous prediction endpoint with a defense-focused explanation prompt.
+        Returns immediately with a `generation_id` to poll for results.
 
         Supply either inline `shots` payloads (with engineered features) **or** reference
         existing shots via `shot_ids` returned from `/match/{match_id}/shots`.
@@ -295,18 +295,41 @@ paths:
                   shot_ids:
                     - "039e4f78-c99d-4103-b9cc-1b83eca35b7c"
       responses:
-        '200':
-          description: Predictions and explanations
+        '202':
+          description: Prediction job enqueued successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ShotPredictionResponse'
+                $ref: '#/components/schemas/PredictionJobResponse'
         '400':
           description: At least one shot must be provided
         '404':
           description: One or more referenced `shot_ids` could not be located
-        '502':
-          description: Failed to retrieve a response from the LLM
+
+  /predict_shots:
+    get:
+      tags: [Predictions]
+      summary: Poll status of async prediction job
+      description: |
+        Poll the status of an asynchronous prediction job created by `/offense/predict_shots` or `/defense/predict_shots`.
+
+        Returns the current status (QUEUED, RUNNING, COMPLETED, FAILED) and includes the full prediction results when completed.
+      operationId: getPredictionStatus
+      parameters:
+        - name: generation_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+          description: UUID returned when the prediction job was enqueued
+      responses:
+        '200':
+          description: Prediction job status (and result if completed)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PredictionJobStatusResponse'
+        '404':
+          description: Job not found for the specified generation_id
 
   /match/{match_id}/shots:
     get:
@@ -532,6 +555,53 @@ components:
           items: { $ref: '#/components/schemas/InsightItem' }
         generated_at: { type: string, format: date-time }
         llm_model: { type: string, nullable: true }
+
+    # ---------- Async Prediction Jobs ----------
+    PredictionJobResponse:
+      type: object
+      required: [generation_id, status, created_at]
+      properties:
+        generation_id:
+          type: string
+          format: uuid
+          description: Unique identifier for this prediction job
+        status:
+          type: string
+          enum: ["QUEUED", "RUNNING", "COMPLETED", "FAILED"]
+          description: Current status of the job
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the job was created
+
+    PredictionJobStatusResponse:
+      type: object
+      required: [generation_id, status, created_at, updated_at]
+      properties:
+        generation_id:
+          type: string
+          format: uuid
+          description: Unique identifier for this prediction job
+        status:
+          type: string
+          enum: ["QUEUED", "RUNNING", "COMPLETED", "FAILED"]
+          description: Current status of the job
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the job was created
+        updated_at:
+          type: string
+          format: date-time
+          description: Timestamp when the job was last updated
+        result:
+          $ref: '#/components/schemas/ShotPredictionResponse'
+          nullable: true
+          description: Prediction results (only present when status is COMPLETED)
+        error_message:
+          type: string
+          nullable: true
+          description: Error message (only present when status is FAILED)
 
     # ---------- Predictions (sync) ----------
     ShotPredictionRequest:
