@@ -153,7 +153,7 @@ def _compute_context_for_shot(
     connection: sqlite3.Connection, shot: ShotFeatures, shooter_xg: float, model: LogisticRegressionModel
 ) -> TeammateContext:
 
-    simulation_decay = 0.05
+    simulation_decay = 0.025
 
     if not shot.shot_id:
         return TeammateContext(teammate_scoring_potential=[])
