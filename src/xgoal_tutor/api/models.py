@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field as dataclass_field
+from datetime import datetime
+from enum import Enum
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -176,6 +178,40 @@ class ShotPredictionResponse(BaseModel):
 
     shots: List[ShotPrediction]
     llm_model: str
+
+
+class JobStatus(str, Enum):
+    """Status of an async prediction job."""
+
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class PredictionJobResponse(BaseModel):
+    """Response returned when creating an async prediction job."""
+
+    generation_id: str = Field(..., description="Unique identifier for this prediction job")
+    status: JobStatus = Field(..., description="Current status of the job")
+    created_at: datetime = Field(..., description="Timestamp when the job was created")
+
+
+class PredictionJobStatusResponse(BaseModel):
+    """Response returned when polling prediction job status."""
+
+    generation_id: str = Field(..., description="Unique identifier for this prediction job")
+    status: JobStatus = Field(..., description="Current status of the job")
+    created_at: datetime = Field(..., description="Timestamp when the job was created")
+    updated_at: datetime = Field(..., description="Timestamp when the job was last updated")
+    result: Optional[ShotPredictionResponse] = Field(
+        default=None,
+        description="Prediction results (only present when status is COMPLETED)",
+    )
+    error_message: Optional[str] = Field(
+        default=None,
+        description="Error message (only present when status is FAILED)",
+    )
 
 
 # Allowed models are declared here to keep validation next to the request model.

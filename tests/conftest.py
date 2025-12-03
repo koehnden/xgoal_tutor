@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import sys
+import uuid
 from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, Callable, Dict, List, Optional
+from unittest.mock import MagicMock
 
 
 # --------------------------------------------------------------------------------------
@@ -31,12 +33,12 @@ if "fastapi" not in sys.modules:  # pragma: no cover - import side effect
             self.routes: List[_Route] = []
 
         def post(
-            self, path: str, response_model: Optional[Any] = None
+            self, path: str, response_model: Optional[Any] = None, status_code: int = 200, **kwargs: Any
         ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
             return self._add_route("POST", path)
 
         def get(
-            self, path: str, response_model: Optional[Any] = None
+            self, path: str, response_model: Optional[Any] = None, **kwargs: Any
         ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
             return self._add_route("GET", path)
 
@@ -157,3 +159,40 @@ if "pydantic" not in sys.modules:  # pragma: no cover - import side effect
     pydantic_module.Field = Field
     pydantic_module.field_validator = field_validator
     sys.modules["pydantic"] = pydantic_module
+
+
+# --------------------------------------------------------------------------------------
+# Minimal Celery stub
+# --------------------------------------------------------------------------------------
+if "celery" not in sys.modules:  # pragma: no cover - import side effect
+    celery_module = ModuleType("celery")
+
+    class AsyncResult:
+        def __init__(self, task_id: str, state: str = "PENDING", result: Any = None, info: Any = None):
+            self.id = task_id
+            self.state = state
+            self.result = result
+            self.info = info
+
+    celery_result_module = ModuleType("celery.result")
+    celery_result_module.AsyncResult = AsyncResult
+
+    class Celery:
+        def __init__(self, *args: Any, **kwargs: Any):
+            self.conf = MagicMock()
+            self.conf.update = MagicMock()
+
+        def autodiscover_tasks(self, packages: Any) -> None:
+            pass
+
+        def task(self, *args: Any, **kwargs: Any):
+            def decorator(func):
+                func.apply_async = MagicMock(return_value=MagicMock(id=str(uuid.uuid4())))
+                func.delay = MagicMock()
+                return func
+            return decorator
+
+    celery_module.Celery = Celery
+    celery_module.result = celery_result_module
+    sys.modules["celery"] = celery_module
+    sys.modules["celery.result"] = celery_result_module

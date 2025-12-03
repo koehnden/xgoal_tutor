@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -15,7 +17,10 @@ except (ImportError, AttributeError):  # pragma: no cover - fallback for simplif
 from xgoal_tutor.api.models import (
     DEFAULT_LOGISTIC_REGRESSION_MODEL,
     DEFAULT_PRIMARY_MODEL,
+    JobStatus,
     LogisticRegressionModel,
+    PredictionJobResponse,
+    PredictionJobStatusResponse,
     ShotFeatures,
     ShotPrediction,
     ShotPredictionRequest,
@@ -34,6 +39,10 @@ from xgoal_tutor.api._matches import list_matches as fetch_matches
 from xgoal_tutor.api._shots import (
     list_match_shot_features as fetch_match_shots,
     load_shot_features_by_ids,
+)
+from xgoal_tutor.api.tasks import (
+    predict_shots_offense_task,
+    predict_shots_defense_task,
 )
 
 app = FastAPI(title="xGoal Inference Service", version="1.0.0")
@@ -256,15 +265,19 @@ def get_match_player_summary_status(match_id: str, player_id: str, generation_id
     raise HTTPException(status_code=501, detail="Match player summary status retrieval is not yet implemented")
 
 
-@app.post("/offense/predict_shots", response_model=ShotPredictionResponse)
-def offense_predict_shots(payload: ShotPredictionRequest) -> ShotPredictionResponse:
+@app.post("/offense/predict_shots", response_model=PredictionJobResponse, status_code=202)
+def offense_predict_shots(payload: ShotPredictionRequest) -> PredictionJobResponse:
     """
-    Synchronous xG prediction with an offense-focused managed prompt.
+    Enqueue async xG prediction with an offense-focused managed prompt.
+
+    Returns
+    -------
+    202 Accepted with generation_id to poll for results
 
     Notes
     -----
-    * Reuses the same pipeline as the general prediction endpoint but forces the
-      offense xGoal prompt template.
+    * This endpoint immediately returns a generation_id and enqueues the prediction
+      task. Use GET /predict_shots?generation_id=<UUID> to poll for results.
     """
     shots: List[ShotFeatures] = list(payload.shots)
     if payload.shot_ids:
@@ -278,67 +291,42 @@ def offense_predict_shots(payload: ShotPredictionRequest) -> ShotPredictionRespo
     if not shots:
         raise HTTPException(status_code=400, detail="At least one shot must be provided")
 
-    model = payload.model or DEFAULT_LOGISTIC_REGRESSION_MODEL
-    if model is DEFAULT_LOGISTIC_REGRESSION_MODEL:
-        model = LogisticRegressionModel(**DEFAULT_LOGISTIC_REGRESSION_MODEL.model_dump())
-    predictions, contributions = generate_shot_predictions(shots, model)
-    predictions = _apply_teammate_context(shots, predictions, model)
+    # Generate unique job ID
+    generation_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc)
 
-    try:
-        llm_responses, model_used = generate_llm_explanation(
-            _LLM_CLIENT,
-            shots,
-            predictions,
-            contributions,
-            llm_model=payload.llm_model,
-            prompt_template_name="xgoal_offense_prompt.md",
-        )
-    except RuntimeError as exc:  # pragma: no cover - network error path
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    # Serialize shots and model for Celery
+    shots_data = [shot.model_dump() for shot in shots]
+    model_data = None
+    if payload.model:
+        model_data = payload.model.model_dump()
 
-    resolved_llm_model = model_used or payload.llm_model or DEFAULT_PRIMARY_MODEL
-
-    predictions_with_explanations: List[ShotPrediction] = []
-    for index, prediction in enumerate(predictions):
-        if hasattr(prediction, "model_dump"):
-            data = prediction.model_dump()
-        else:
-            data = prediction.dict()  # type: ignore[attr-defined]
-        data["explanation"] = llm_responses[index]
-        predictions_with_explanations.append(ShotPrediction(**data))
-
-    response = ShotPredictionResponse(
-        shots=predictions_with_explanations,
-        llm_model=resolved_llm_model,
+    # Enqueue task with custom task_id
+    predict_shots_offense_task.apply_async(
+        args=[shots_data, model_data, payload.llm_model],
+        task_id=generation_id,
     )
 
-    for match_id, match_predictions in group_predictions_by_match(predictions_with_explanations).items():
-        cached_response = ShotPredictionResponse(
-            shots=[
-                ShotPrediction(
-                    **(
-                        prediction.model_dump()
-                        if hasattr(prediction, "model_dump")
-                        else prediction.dict()  # type: ignore[attr-defined]
-                    )
-                )
-                for prediction in match_predictions
-            ],
-            llm_model=response.llm_model,
-        )
-        _MATCH_CACHE[match_id] = cached_response
-
-    return response
+    return PredictionJobResponse(
+        generation_id=generation_id,
+        status=JobStatus.QUEUED,
+        created_at=created_at,
+    )
 
 
-@app.post("/defense/predict_shots", response_model=ShotPredictionResponse)
-def defense_predict_shots(payload: ShotPredictionRequest) -> ShotPredictionResponse:
+@app.post("/defense/predict_shots", response_model=PredictionJobResponse, status_code=202)
+def defense_predict_shots(payload: ShotPredictionRequest) -> PredictionJobResponse:
     """
-    Synchronous xG prediction with a defense-focused managed prompt.
+    Enqueue async xG prediction with a defense-focused managed prompt.
+
+    Returns
+    -------
+    202 Accepted with generation_id to poll for results
 
     Notes
     -----
-    * Same scoring pipeline; only the LLM prompt template differs.
+    * This endpoint immediately returns a generation_id and enqueues the prediction
+      task. Use GET /predict_shots?generation_id=<UUID> to poll for results.
     """
     shots: List[ShotFeatures] = list(payload.shots)
     if payload.shot_ids:
@@ -352,67 +340,121 @@ def defense_predict_shots(payload: ShotPredictionRequest) -> ShotPredictionRespo
     if not shots:
         raise HTTPException(status_code=400, detail="At least one shot must be provided")
 
-    model = payload.model or DEFAULT_LOGISTIC_REGRESSION_MODEL
-    if model is DEFAULT_LOGISTIC_REGRESSION_MODEL:
-        model = LogisticRegressionModel(**DEFAULT_LOGISTIC_REGRESSION_MODEL.model_dump())
-    predictions, contributions = generate_shot_predictions(shots, model)
-    predictions = _apply_teammate_context(shots, predictions, model)
+    # Generate unique job ID
+    generation_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc)
 
-    try:
-        llm_responses, model_used = generate_llm_explanation(
-            _LLM_CLIENT,
-            shots,
-            predictions,
-            contributions,
-            llm_model=payload.llm_model,
-            prompt_template_name="xgoal_defense_prompt.md",
-        )
-    except RuntimeError as exc:  # pragma: no cover - network error path
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    # Serialize shots and model for Celery
+    shots_data = [shot.model_dump() for shot in shots]
+    model_data = None
+    if payload.model:
+        model_data = payload.model.model_dump()
 
-    resolved_llm_model = model_used or payload.llm_model or DEFAULT_PRIMARY_MODEL
-
-    predictions_with_explanations: List[ShotPrediction] = []
-    for index, prediction in enumerate(predictions):
-        if hasattr(prediction, "model_dump"):
-            data = prediction.model_dump()
-        else:
-            data = prediction.dict()  # type: ignore[attr-defined]
-        data["explanation"] = llm_responses[index]
-        predictions_with_explanations.append(ShotPrediction(**data))
-
-    response = ShotPredictionResponse(
-        shots=predictions_with_explanations,
-        llm_model=resolved_llm_model,
+    # Enqueue task with custom task_id
+    predict_shots_defense_task.apply_async(
+        args=[shots_data, model_data, payload.llm_model],
+        task_id=generation_id,
     )
 
-    for match_id, match_predictions in group_predictions_by_match(predictions_with_explanations).items():
-        cached_response = ShotPredictionResponse(
-            shots=[
-                ShotPrediction(
-                    **(
-                        (
-                            prediction.model_dump()
-                            if hasattr(prediction, "model_dump")
-                            else prediction.dict()  # type: ignore[attr-defined]
-                        )
-                    )
-                )
-                for prediction in match_predictions
-            ],
-            llm_model=resolved_llm_model,
-        )
-        _MATCH_CACHE[match_id] = cached_response
-
-    return response
+    return PredictionJobResponse(
+        generation_id=generation_id,
+        status=JobStatus.QUEUED,
+        created_at=created_at,
+    )
 
 
-@app.post("/predict_shots", response_model=ShotPredictionResponse)
-def predict_shots(payload: ShotPredictionRequest) -> ShotPredictionResponse:
+@app.post("/predict_shots", response_model=PredictionJobResponse, status_code=202)
+def predict_shots(payload: ShotPredictionRequest) -> PredictionJobResponse:
     """
-    Backwards-compatible alias for offense-focused predictions.
+    Backwards-compatible alias for offense-focused async predictions.
     """
     return offense_predict_shots(payload)
+
+
+@app.get("/predict_shots", response_model=PredictionJobStatusResponse)
+def get_prediction_status(generation_id: str = Query(..., description="UUID of the prediction job")) -> PredictionJobStatusResponse:
+    """
+    Poll the status of an async prediction job.
+
+    Parameters
+    ----------
+    generation_id : str
+        The UUID returned when the prediction job was created
+
+    Returns
+    -------
+    PredictionJobStatusResponse
+        Current status and result (if completed) of the prediction job
+
+    Raises
+    ------
+    404
+        If the generation_id does not exist
+    """
+    from celery.result import AsyncResult
+
+    # Get task result from Celery
+    task_result = AsyncResult(generation_id)
+
+    if task_result.state == "PENDING":
+        # Task not found or not yet started
+        if not task_result.info:
+            raise HTTPException(status_code=404, detail=f"Job {generation_id} not found")
+
+        return PredictionJobStatusResponse(
+            generation_id=generation_id,
+            status=JobStatus.QUEUED,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+
+    elif task_result.state == "STARTED":
+        return PredictionJobStatusResponse(
+            generation_id=generation_id,
+            status=JobStatus.RUNNING,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+
+    elif task_result.state == "SUCCESS":
+        result_data = task_result.result
+
+        # Parse result into ShotPredictionResponse
+        if result_data:
+            prediction_response = ShotPredictionResponse(
+                shots=[ShotPrediction(**shot_data) for shot_data in result_data["shots"]],
+                llm_model=result_data["llm_model"],
+            )
+        else:
+            prediction_response = None
+
+        return PredictionJobStatusResponse(
+            generation_id=generation_id,
+            status=JobStatus.COMPLETED,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+            result=prediction_response,
+        )
+
+    elif task_result.state == "FAILURE":
+        error_msg = str(task_result.info) if task_result.info else "Unknown error"
+
+        return PredictionJobStatusResponse(
+            generation_id=generation_id,
+            status=JobStatus.FAILED,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+            error_message=error_msg,
+        )
+
+    else:
+        # Handle other states (RETRY, REVOKED, etc.)
+        return PredictionJobStatusResponse(
+            generation_id=generation_id,
+            status=JobStatus.QUEUED,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
 
 
 @app.get("/match/{match_id}/shots")
